@@ -1,4 +1,4 @@
-"""Подготовить и запустить тестовый MCP-сервер с ngrok."""
+"""Подготовить и запустить MCP-сервер с туннелем ngrok."""
 
 import os
 import errno
@@ -13,7 +13,7 @@ import time
 import venv
 
 
-PROJECT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 
 def check_port_available():
@@ -80,7 +80,8 @@ def main():
     listener = None
     try:
         server = subprocess.Popen(
-            [str(python), str(PROJECT_DIR / "pc_gpt_test.py")],
+            [str(python), "-m", "telegram_mcp.mcp_server"],
+            cwd=PROJECT_DIR,
             start_new_session=True,
         )
         processes.append(server)

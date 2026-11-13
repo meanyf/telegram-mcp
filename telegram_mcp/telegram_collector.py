@@ -6,11 +6,12 @@ from datetime import datetime, timedelta, timezone
 import getpass
 import json
 import os
-from pathlib import Path
 import sqlite3
 
 
-DATA = Path(__file__).resolve().parent / '.local' / 'telegram'
+from .paths import TELEGRAM_DATA
+
+DATA = TELEGRAM_DATA
 
 
 def prepare_directory():
@@ -70,7 +71,7 @@ async def collect_source(client, db, source, since):
 def load_config():
     path = DATA / 'config.json'
     if not path.exists():
-        raise RuntimeError('Сначала выполните: python telegram_collect.py setup')
+        raise RuntimeError('Сначала выполните: .venv/bin/python -m telegram_mcp.telegram_collector setup')
     return json.loads(path.read_text())
 
 
