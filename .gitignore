@@ -1,0 +1,7 @@
+.venv/
+.local/
+__pycache__/
+*.pyc
+chat-hh-codex.json
+*.session
+*.session-journal
