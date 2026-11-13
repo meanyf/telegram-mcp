@@ -1,4 +1,5 @@
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,6 +16,11 @@ class TelegramMCPTests(unittest.TestCase):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         data = Path(directory.name)
+        self.now = datetime(2026, 11, 13, 12, tzinfo=timezone.utc)
+        clock = patch.object(telegram_storage, 'datetime', wraps=datetime)
+        self.clock = clock.start()
+        self.clock.now.return_value = self.now
+        self.addCleanup(clock.stop)
         override = patch.object(telegram_storage, 'TELEGRAM_DATA', data)
         override.start()
         self.addCleanup(override.stop)
@@ -25,7 +31,7 @@ class TelegramMCPTests(unittest.TestCase):
         with db:
             for chat_id, message_id in [(1, 10), (1, 20), (1, 30), (2, 1)]:
                 db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                           (chat_id, message_id, 'Chat', '2026-11-13', None, 'Text', None, 0))
+                           (chat_id, message_id, 'Chat', (self.now - timedelta(hours=1)).isoformat(), None, 'Text', None, 0))
         db.close()
 
     def test_only_selected_sources_and_no_credentials_in_list(self):
@@ -36,16 +42,14 @@ class TelegramMCPTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mcp.get_telegram_messages(2)
 
-    def test_invalid_limits_rejected(self):
-        for limit in (0, 101):
-            with self.assertRaises(ValueError):
-                mcp.get_telegram_messages(1, limit=limit)
-
-    def test_first_read_only_returns_latest_messages_then_nothing(self):
-        first = mcp.get_telegram_messages(1, limit=2)
-        self.assertEqual([m['message_id'] for m in first['messages']], [20, 30])
-        self.assertTrue(first['older_history_skipped'])
-        self.assertFalse(first['has_more'])
+    def test_first_read_returns_whole_day_then_nothing(self):
+        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+            for number in range(31, 131):
+                db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                           (1, number, 'Chat', self.now.isoformat(), None, 'New', None, 0))
+        first = mcp.get_telegram_messages(1)
+        self.assertEqual(len(first['messages']), 103)
+        self.assertEqual(first['window_start_utc'], (self.now - timedelta(hours=24)).isoformat())
         self.assertEqual(mcp.get_telegram_messages(1)['messages'], [])
 
     def test_new_messages_returned_after_saved_cursor_without_repeating(self):
@@ -53,14 +57,42 @@ class TelegramMCPTests(unittest.TestCase):
         with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
             for number in (40, 50):
                 db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                           (1, number, 'Chat', '2026-11-13', None, 'New', None, 0))
-        first = mcp.get_telegram_messages(1, limit=1)
-        self.assertEqual([m['message_id'] for m in first['messages']], [40])
-        self.assertTrue(first['has_more'])
-        second = mcp.get_telegram_messages(1, limit=1)
-        self.assertEqual([m['message_id'] for m in second['messages']], [50])
-        self.assertFalse(second['has_more'])
+                           (1, number, 'Chat', self.now.isoformat(), None, 'New', None, 0))
+        first = mcp.get_telegram_messages(1)
+        self.assertEqual([m['message_id'] for m in first['messages']], [40, 50])
         self.assertEqual(mcp.get_telegram_messages(1)['messages'], [])
+
+    def test_24_hour_boundary_uses_actual_time_with_timezone_offsets(self):
+        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+            db.execute('DELETE FROM messages')
+            dates = [self.now - timedelta(hours=24, seconds=1),
+                     (self.now - timedelta(hours=24)).astimezone(timezone(timedelta(hours=3))),
+                     self.now, self.now + timedelta(seconds=1)]
+            for number, date in enumerate(dates, 1):
+                db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                           (1, number, 'Chat', date.isoformat(), None, 'Text', None, 0))
+        result = mcp.get_telegram_messages(1)
+        self.assertEqual([m['message_id'] for m in result['messages']], [2, 3])
+
+    def test_messages_older_than_day_are_skipped_after_downtime(self):
+        mcp.get_telegram_messages(1)
+        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+            for number, age in [(40, 25), (50, 1)]:
+                db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                           (1, number, 'Chat', (self.now - timedelta(hours=age)).isoformat(),
+                            None, 'New', None, 0))
+        result = mcp.get_telegram_messages(1)
+        self.assertEqual([m['message_id'] for m in result['messages']], [50])
+
+    def test_window_moves_forward_on_next_request(self):
+        mcp.get_telegram_messages(1)
+        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+            db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                       (1, 40, 'Chat', (self.now + timedelta(hours=1)).isoformat(),
+                        None, 'Later', None, 0))
+        self.assertEqual(mcp.get_telegram_messages(1)['messages'], [])
+        self.clock.now.return_value = self.now + timedelta(hours=2)
+        self.assertEqual([m['message_id'] for m in mcp.get_telegram_messages(1)['messages']], [40])
 
     def test_concurrent_reads_do_not_repeat_delivered_messages(self):
         from concurrent.futures import ThreadPoolExecutor

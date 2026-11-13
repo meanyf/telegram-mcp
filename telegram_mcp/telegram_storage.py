@@ -1,6 +1,7 @@
 """Чтение выбранных Telegram-чатов и хранение отметок передачи сообщений."""
 
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 
@@ -26,39 +27,33 @@ def open_messages():
     return db
 
 
-def read_new_messages(chat_id, limit):
+def read_new_messages(chat_id):
     path = TELEGRAM_DATA / 'delivery.sqlite3'
     path.touch(mode=0o600, exist_ok=True)
     with closing(sqlite3.connect(path, timeout=15)) as state, state:
-        state.execute('''CREATE TABLE IF NOT EXISTS delivered
-                         (chat_id INTEGER PRIMARY KEY, last_id INTEGER NOT NULL)''')
+        state.execute("""CREATE TABLE IF NOT EXISTS delivered
+                         (chat_id INTEGER PRIMARY KEY, last_id INTEGER NOT NULL)""")
         state.execute('BEGIN IMMEDIATE')
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(hours=24)
         cursor = state.execute('SELECT last_id FROM delivered WHERE chat_id = ?',
                                (chat_id,)).fetchone()
+        last_id = cursor[0] if cursor else 0
         with closing(open_messages()) as db:
-            if cursor is None:
-                # На первом вызове берём только последние limit сообщений, не весь архив.
-                rows = db.execute('''SELECT message_id, sent_at, sender_id, text, link, has_media
-                                     FROM messages WHERE chat_id = ?
-                                     ORDER BY message_id DESC LIMIT ?''',
-                                  (chat_id, limit + 1)).fetchall()
-                skipped = len(rows) > limit
-                messages = [dict(row) for row in reversed(rows[:limit])]
-                has_more = False
-            else:
-                rows = db.execute('''SELECT message_id, sent_at, sender_id, text, link, has_media
-                                     FROM messages WHERE chat_id = ? AND message_id > ?
-                                     ORDER BY message_id LIMIT ?''',
-                                  (chat_id, cursor[0], limit + 1)).fetchall()
-                skipped = False
-                messages = [dict(row) for row in rows[:limit]]
-                has_more = len(rows) > limit
-        last_id = messages[-1]['message_id'] if messages else (cursor[0] if cursor else 0)
-        state.execute('''INSERT INTO delivered VALUES (?, ?)
-                         ON CONFLICT(chat_id) DO UPDATE SET last_id = excluded.last_id''',
+            rows = db.execute("""SELECT message_id, sent_at, sender_id, text, link, has_media
+                                 FROM messages WHERE chat_id = ? AND message_id > ?
+                                 AND julianday(sent_at) >= julianday(?)
+                                 AND julianday(sent_at) <= julianday(?)
+                                 ORDER BY message_id""",
+                              (chat_id, last_id, start.isoformat(), end.isoformat())).fetchall()
+        messages = [dict(row) for row in rows]
+        if messages:
+            last_id = messages[-1]['message_id']
+        state.execute("""INSERT INTO delivered VALUES (?, ?)
+                         ON CONFLICT(chat_id) DO UPDATE SET last_id = excluded.last_id""",
                       (chat_id, last_id))
-    return {'messages': messages, 'has_more': has_more,
-            'older_history_skipped': skipped}
+    return {'messages': messages, 'window_start_utc': start.isoformat(),
+            'window_end_utc': end.isoformat()}
 
 
 def list_chats() -> dict:
@@ -72,10 +67,8 @@ def list_chats() -> dict:
     return {'chats': chats}
 
 
-def get_messages(chat_id: int, limit: int = 50) -> dict:
-    if not 1 <= limit <= 100:
-        raise ValueError('limit должен быть от 1 до 100')
+def get_messages(chat_id: int) -> dict:
     source = selected_sources().get(chat_id)
     if source is None:
         raise ValueError('Чат не выбран для сбора')
-    return {**source, **read_new_messages(chat_id, limit)}
+    return {**source, **read_new_messages(chat_id)}
