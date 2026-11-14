@@ -140,19 +140,30 @@ async def setup():
     try:
         await login(client)
         dialogs = [dialog async for dialog in client.iter_dialogs()]
+        existing = {source['id']: source for source in config.get('sources', [])}
+        mode = '1'
+        if existing:
+            print(f'Выбрано чатов: {len(existing)}')
+            print('1. Добавить чаты к выбранным (по умолчанию)')
+            print('2. Заменить список целиком')
+            mode = input('Режим [1]: ').strip() or '1'
+            if mode not in ('1', '2'):
+                raise ValueError('Выберите режим 1 или 2.')
         for index, dialog in enumerate(dialogs, 1):
-            print(f'{index}. {dialog.name} [{dialog.id}]')
+            selected = ' — уже выбран' if dialog.id in existing else ''
+            print(f'{index}. {dialog.name} [{dialog.id}]{selected}')
         choices = sorted(set(int(part.strip()) for part in
                              input('Номера чатов через запятую: ').split(',')))
         if not choices or any(i < 1 or i > len(dialogs) for i in choices):
             raise ValueError('Укажите номера из списка.')
-        sources = []
+        sources = dict(existing) if mode == '1' else {}
         for index in choices:
             dialog = dialogs[index - 1]
-            sources.append({'id': utils.get_peer_id(dialog.entity), 'title': dialog.name,
-                            'username': getattr(dialog.entity, 'username', None),
-                            'channel': dialog.is_channel})
-        config['sources'] = sources
+            chat_id = utils.get_peer_id(dialog.entity)
+            sources[chat_id] = {'id': chat_id, 'title': dialog.name,
+                                'username': getattr(dialog.entity, 'username', None),
+                                'channel': dialog.is_channel}
+        config['sources'] = list(sources.values())
         # Общая граница первого запуска фиксируется, чтобы простой не терял сообщения.
         config.setdefault('since', (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
         save_config(config)

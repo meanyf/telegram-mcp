@@ -1,4 +1,6 @@
 import asyncio
+from io import StringIO
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import sqlite3
@@ -104,6 +106,54 @@ class QRLoginTests(unittest.IsolatedAsyncioTestCase):
         await login(self.client)
         self.client.qr_login.assert_not_called()
         self.display.assert_not_called()
+
+
+class SetupSourcesTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from telethon.tl.types import User
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name)
+        override = patch('telegram_mcp.telegram_collector.DATA', self.path)
+        override.start()
+        self.addCleanup(override.stop)
+        self.config = {'api_id': 123, 'api_hash': 'test-key', 'since': '2026-11-13T00:00:00+00:00',
+                       'sources': [{'id': 1, 'title': 'Old name', 'username': None, 'channel': False}]}
+        (self.path / 'config.json').write_text(json.dumps(self.config))
+
+        async def dialogs():
+            for number in (1, 2):
+                yield SimpleNamespace(id=number, name=f'Chat {number}',
+                                      entity=User(id=number, first_name=f'Chat {number}'),
+                                      is_channel=False)
+
+        self.client = SimpleNamespace(connect=AsyncMock(), disconnect=AsyncMock(), iter_dialogs=dialogs)
+
+    async def configure(self, answers):
+        from telegram_mcp.telegram_collector import setup
+        with patch('telethon.TelegramClient', return_value=self.client), \
+                patch('telegram_mcp.telegram_collector.login', new=AsyncMock()), \
+                patch('builtins.input', side_effect=answers), \
+                patch('sys.stdout', new=StringIO()):
+            await setup()
+        return json.loads((self.path / 'config.json').read_text())
+
+    async def test_append_keeps_previous_chats_and_deduplicates_reselection(self):
+        config = await self.configure(['', '1,2,2'])
+        self.assertEqual([source['id'] for source in config['sources']], [1, 2])
+        self.assertEqual(config['sources'][0]['title'], 'Chat 1')
+        self.assertEqual(config['since'], self.config['since'])
+        self.assertEqual(config['api_hash'], self.config['api_hash'])
+
+    async def test_replace_removes_unselected_chats(self):
+        config = await self.configure(['2', '2'])
+        self.assertEqual([source['id'] for source in config['sources']], [2])
+
+    async def test_invalid_mode_does_not_change_saved_config(self):
+        with self.assertRaises(ValueError):
+            await self.configure(['3'])
+        self.assertEqual(json.loads((self.path / 'config.json').read_text()), self.config)
+        self.client.disconnect.assert_awaited_once()
 
 
 if __name__ == '__main__':
