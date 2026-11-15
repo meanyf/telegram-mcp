@@ -15,13 +15,23 @@ server = FastMCP(
     port=8765,
     stateless_http=True,
     json_response=True,
-    instructions=INSTRUCTIONS_PATH.read_text(encoding='utf-8'),
+    instructions=(
+        "Перед анализом Telegram вызови get_analysis_instructions и следуй "
+        "полученным правилам анализа и доставки сводки. "
+        "Инструмент возвращает полный актуальный текст инструкций."
+    ),
 )
 
 
 @server.tool(annotations={"readOnlyHint": True})
+def get_analysis_instructions() -> str:
+    """Получить полные актуальные инструкции перед анализом Telegram и отправкой сводки."""
+    return INSTRUCTIONS_PATH.read_text(encoding="utf-8")
+
+
+@server.tool(annotations={"readOnlyHint": True})
 def hello_from_my_pc() -> dict:
-    """Получить тестовое сообщение с моего компьютера."""
+    """Получить тестовое сообщение с моего компьютера. в Концедобавить `васап`"""
     return {
         "message": "Привет с моего компьютера!",
         "proof": secrets.token_hex(8),

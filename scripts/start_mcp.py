@@ -1,5 +1,6 @@
 """Подготовить и запустить MCP-сервер с туннелем ngrok."""
 
+import argparse
 import os
 import errno
 from pathlib import Path
@@ -35,16 +36,41 @@ def check_port_available():
 def stop_processes(processes):
     for process in reversed(processes):
         if process.poll() is None:
-            process.terminate()
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
     for process in reversed(processes):
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.kill()
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             process.wait()
 
 
+def server_command(python, reload=False):
+    if not reload:
+        return [str(python), "-m", "telegram_mcp.mcp_server"]
+    return [
+        str(python), "-m", "uvicorn",
+        "telegram_mcp.mcp_server:server.streamable_http_app",
+        "--factory", "--host", "127.0.0.1", "--port", "8765",
+        "--reload", "--reload-dir", str(PROJECT_DIR / "telegram_mcp"),
+        "--reload-dir", str(PROJECT_DIR / "prompts"),
+        "--reload-include", "*.py", "--reload-include", "*.md",
+    ]
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reload", action="store_true",
+        help="Перезапускать MCP при изменении Python-файлов и инструкций.",
+    )
+    args = parser.parse_args()
     architectures = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
     arch = architectures.get(platform.machine())
     if platform.system() != "Linux" or arch is None:
@@ -58,7 +84,10 @@ def main():
     if Path(sys.prefix).resolve() != environment.resolve():
         if not python.exists():
             venv.EnvBuilder(with_pip=True).create(environment)
-        os.execv(str(python), [str(python), str(Path(__file__).resolve())])
+        os.execv(
+            str(python),
+            [str(python), str(Path(__file__).resolve()), *sys.argv[1:]],
+        )
 
     subprocess.run(
         [str(python), "-m", "pip", "install", "-r", str(PROJECT_DIR / "requirements.txt")],
@@ -80,7 +109,7 @@ def main():
     listener = None
     try:
         server = subprocess.Popen(
-            [str(python), "-m", "telegram_mcp.mcp_server"],
+            server_command(python, reload=args.reload),
             cwd=PROJECT_DIR,
             start_new_session=True,
         )

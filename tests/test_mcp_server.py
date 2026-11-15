@@ -11,6 +11,18 @@ from telegram_mcp import telegram_storage
 from telegram_mcp.telegram_collector import open_database
 
 
+class InstructionsTests(unittest.TestCase):
+    def test_returns_full_instructions_and_reads_changes_on_each_call(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'instructions.md'
+            text = 'Правила анализа\n' * 100 + 'Конец полного промпта'
+            path.write_text(text, encoding='utf-8')
+            with patch.object(mcp, 'INSTRUCTIONS_PATH', path):
+                self.assertEqual(mcp.get_analysis_instructions(), text)
+                path.write_text('Обновлённые правила', encoding='utf-8')
+                self.assertEqual(mcp.get_analysis_instructions(), 'Обновлённые правила')
+
+
 class TelegramMCPTests(unittest.TestCase):
     def setUp(self):
         directory = TemporaryDirectory()

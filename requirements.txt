@@ -2,3 +2,5 @@ mcp>=1.26,<2
 ngrok>=1,<2
 telethon>=1.45,<2
 qrcode>=7.4,<9
+uvicorn>=0.31,<1
+watchfiles>=1,<2
