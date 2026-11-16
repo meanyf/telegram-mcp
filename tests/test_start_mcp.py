@@ -12,7 +12,7 @@ class LauncherTests(unittest.TestCase):
     def test_reload_uses_mcp_factory_and_watches_code_and_instructions(self):
         command = server_command('/venv/bin/python', reload=True)
         self.assertEqual(command[:3], ['/venv/bin/python', '-m', 'uvicorn'])
-        self.assertIn('telegram_mcp.mcp_server:server.streamable_http_app', command)
+        self.assertIn('telegram_mcp.mcp_server:create_app', command)
         self.assertIn('--factory', command)
         self.assertIn('--reload', command)
         watched = [command[i + 1] for i, arg in enumerate(command) if arg == '--reload-dir']

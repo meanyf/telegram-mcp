@@ -56,8 +56,9 @@ def server_command(python, reload=False):
         return [str(python), "-m", "telegram_mcp.mcp_server"]
     return [
         str(python), "-m", "uvicorn",
-        "telegram_mcp.mcp_server:server.streamable_http_app",
+        "telegram_mcp.mcp_server:create_app",
         "--factory", "--host", "127.0.0.1", "--port", "8765",
+        "--no-access-log",
         "--reload", "--reload-dir", str(PROJECT_DIR / "telegram_mcp"),
         "--reload-dir", str(PROJECT_DIR / "prompts"),
         "--reload-include", "*.py", "--reload-include", "*.md",
@@ -132,9 +133,12 @@ def main():
             request_header_remove="host",
             request_header_add="host:localhost:8765",
         )
+        key_path = PROJECT_DIR / '.local/telegram/events-key'
+        mcp_path = '/mcp/' + key_path.read_text().strip()
         print(
-            f"\nServer URL для ChatGPT: {listener.url().rstrip('/')}/mcp\n"
+            f"\nServer URL для ChatGPT: {listener.url().rstrip('/')}{mcp_path}\n"
             "Название: My PC Test. Authentication: No authentication.\n"
+            "URL содержит секрет доступа к событиям; не публикуйте его.\n"
             "Для остановки сервера и туннеля нажмите Ctrl+C.",
             flush=True,
         )

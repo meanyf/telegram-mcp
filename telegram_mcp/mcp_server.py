@@ -1,12 +1,15 @@
 """MCP: тест подключения и чтение локальной базы выбранных Telegram-чатов."""
 
 from datetime import datetime, timezone
+import asyncio
+from contextlib import asynccontextmanager
 import secrets
+import threading
 
 from mcp.server.fastmcp import FastMCP
 
 from . import telegram_storage
-from .telegram_bot import send_summary
+from .bot.delivery import send_summary
 from .paths import INSTRUCTIONS_PATH
 
 server = FastMCP(
@@ -66,5 +69,30 @@ def send_telegram_summary(text: str) -> dict:
     return send_summary(text)
 
 
+def create_app():
+    from .bot.commands import run
+    from .events.http import EventsMiddleware
+    from .events.storage import endpoint_path
+
+    app = server.streamable_http_app()
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async with original_lifespan(app):
+            stop = threading.Event()
+            worker = asyncio.create_task(asyncio.to_thread(run, stop))
+            try:
+                yield
+            finally:
+                stop.set()
+                await worker
+
+    app.router.lifespan_context = lifespan
+    app.add_middleware(EventsMiddleware, private_path=endpoint_path())
+    return app
+
+
 if __name__ == "__main__":
-    server.run(transport="streamable-http")
+    import uvicorn
+    uvicorn.run(create_app(), host='127.0.0.1', port=8765, access_log=False)

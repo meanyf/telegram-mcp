@@ -1,4 +1,5 @@
 from io import StringIO
+import fcntl
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -6,7 +7,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import URLError
 
-from telegram_mcp import telegram_bot as bot
+from telegram_mcp.bot import delivery as bot
 
 
 class TelegramBotTests(unittest.TestCase):
@@ -73,6 +74,14 @@ class TelegramBotTests(unittest.TestCase):
         self.assertEqual((self.path / 'bot.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual([call.args[1] for call in api.call_args_list],
                          ['getMe', 'getWebhookInfo', 'getUpdates'])
+
+    def test_setup_refuses_to_compete_with_running_command_listener(self):
+        with (self.path / 'bot-poll.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with patch.object(bot, 'bot_request') as api:
+                with self.assertRaisesRegex(RuntimeError, 'остановите MCP'):
+                    bot.setup()
+                api.assert_not_called()
 
 
 if __name__ == '__main__':
