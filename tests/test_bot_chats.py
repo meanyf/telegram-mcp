@@ -10,8 +10,8 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from urllib.error import HTTPError
 
-from telegram_mcp import telegram_collector as collector, telegram_sources as sources
-from telegram_mcp.bot import chats, commands, delivery, inline_chats
+from telegram_mcp import collector, sources
+from telegram_mcp.bot import chat_menu, commands, delivery, inline_chats
 from telegram_mcp.events import storage
 
 
@@ -20,7 +20,7 @@ class ChatSelectionTests(unittest.TestCase):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.path = Path(directory.name)
-        for module in (storage, chats, inline_chats, commands):
+        for module in (storage, chat_menu, inline_chats, commands):
             override = patch.object(module, 'TELEGRAM_DATA', self.path)
             override.start()
             self.addCleanup(override.stop)
@@ -31,7 +31,7 @@ class ChatSelectionTests(unittest.TestCase):
         self.catalog = [{'id': number, 'title': f'Chat {number:02}', 'channel': False, 'username': None}
                         for number in range(1, 18)]
         sources.write_json(self.path / 'dialogs.json', {'chats': self.catalog, 'updated_at': '2026-11-17'})
-        self.api_patch = patch.object(chats, 'bot_request', return_value={'message_id': 50})
+        self.api_patch = patch.object(chat_menu, 'bot_request', return_value={'message_id': 50})
         self.api = self.api_patch.start()
         self.addCleanup(self.api_patch.stop)
 
@@ -63,18 +63,18 @@ class ChatSelectionTests(unittest.TestCase):
         self.assertTrue(all(len(button.get('callback_data', '').encode()) <= 64 for row in keyboard for button in row))
 
     def test_all_chats_are_separate_and_paginated(self):
-        chats.open_menu(self.bot)
-        chats.handle_callback(self.bot, self.callback('chats:view:all'))
+        chat_menu.open_menu(self.bot)
+        chat_menu.handle_callback(self.bot, self.callback('chats:view:all'))
         content = self.api.call_args.args[2]
         self.assertIn('Все чаты: 17', content['text'])
         self.assertIn('Страница 1/3', content['text'])
-        chats.handle_callback(self.bot, self.callback('chats:page:1'))
+        chat_menu.handle_callback(self.bot, self.callback('chats:page:1'))
         self.assertIn('Страница 2/3', self.api.call_args.args[2]['text'])
-        chats.handle_callback(self.bot, self.callback('chats:view:selected'))
+        chat_menu.handle_callback(self.bot, self.callback('chats:view:selected'))
         self.assertIn('Пока нет выбранных чатов', self.api.call_args.args[2]['text'])
 
     def test_add_button_starts_inline_search_without_prompt(self):
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         keyboard = self.api.call_args.args[2]['reply_markup']['inline_keyboard']
         button = next(row[0] for row in keyboard if row[0]['text'] == 'Добавить чат')
         self.assertEqual(button, {'text': 'Добавить чат', 'switch_inline_query_current_chat': ''})
@@ -149,9 +149,9 @@ class ChatSelectionTests(unittest.TestCase):
         self.assertEqual(sources.load_config(self.path)['sources'], [])
 
     def test_legacy_add_button_requests_fresh_menu_without_search_prompt(self):
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         self.api.reset_mock()
-        chats.handle_callback(self.bot, self.callback('chats:add'))
+        chat_menu.handle_callback(self.bot, self.callback('chats:add'))
         self.assertEqual(self.api.call_args.args[1], 'answerCallbackQuery')
         self.assertIn('/chats', self.api.call_args.args[2]['text'])
         self.assertEqual(sources.load_config(self.path)['sources'], [])
@@ -173,20 +173,20 @@ class ChatSelectionTests(unittest.TestCase):
     def test_search_matches_username_and_button_displays_it(self):
         self.catalog[1]['username'] = 'example_chat'
         sources.write_json(self.path / 'dialogs.json', {'chats': self.catalog, 'updated_at': '2026-11-17'})
-        chats.open_menu(self.bot, '@example_chat')
+        chat_menu.open_menu(self.bot, '@example_chat')
         choices = [row[0]['text'] for row in self.api.call_args.args[2]['reply_markup']['inline_keyboard']
                    if row[0].get('callback_data', '').startswith('chats:set:')]
         self.assertEqual(choices, ['⬜ Chat 02 · @example_chat'])
 
     def test_non_search_questions_still_go_to_ai_after_opening_menu(self):
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         with patch.object(commands.queue, 'enqueue_message', return_value='queued') as question, \
                 patch.object(commands, 'bot_request'):
             commands.process_update(self.bot, self.update('Объясни выжимку'))
         question.assert_called_once()
 
     def test_selection_is_idempotent_and_preserves_credentials_and_since(self):
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         callback = self.callback('chats:set:2:1:0')
         commands.process_update(self.bot, {'callback_query': callback})
         edits = sum(call.args[1] == 'editMessageText' for call in self.api.call_args_list)
@@ -201,8 +201,8 @@ class ChatSelectionTests(unittest.TestCase):
     def test_disabling_last_chat_does_not_delete_saved_messages(self):
         sources.set_selected(self.path, 2, True)
         (self.path / 'messages.sqlite3').write_bytes(b'existing messages')
-        chats.open_menu(self.bot)
-        chats.handle_callback(self.bot, self.callback('chats:set:2:0:0'))
+        chat_menu.open_menu(self.bot)
+        chat_menu.handle_callback(self.bot, self.callback('chats:set:2:0:0'))
         self.assertEqual(sources.load_config(self.path)['sources'], [])
         self.assertEqual((self.path / 'messages.sqlite3').read_bytes(), b'existing messages')
 
@@ -212,45 +212,45 @@ class ChatSelectionTests(unittest.TestCase):
                   if row[0].get('callback_data', '').startswith('chats:set:')]
         self.assertIn('⬜ Chat 10', labels)
         self.assertNotIn('⬜ Chat 02', labels)
-        chats.handle_callback(self.bot, self.callback('chats:page:1'))
+        chat_menu.handle_callback(self.bot, self.callback('chats:page:1'))
         self.assertEqual(self.api.call_args.args[1], 'editMessageText')
         self.assertIn('Страница 2/2', self.api.call_args.args[2]['text'])
         self.assertIn('⬜ Chat 01', str(self.api.call_args.args[2]['reply_markup']))
 
     def test_foreign_users_and_stale_menus_cannot_change_selection(self):
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         self.api.reset_mock()
         commands.process_update(self.bot, self.update(sender=999))
         self.api.assert_not_called()
         for callback in (self.callback('chats:set:2:1:0', sender=999),
                          self.callback('chats:set:2:1:0', message_id=49)):
-            chats.handle_callback(self.bot, callback)
+            chat_menu.handle_callback(self.bot, callback)
         self.assertTrue(all(call.args[1] == 'answerCallbackQuery' for call in self.api.call_args_list))
         self.assertEqual(sources.load_config(self.path)['sources'], [])
 
     def test_unknown_chat_and_malformed_button_do_not_change_selection(self):
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         for data in ('chats:set:999:1:0', 'chats:set:1:2:0', 'chats:page:nope'):
-            chats.handle_callback(self.bot, self.callback(data))
+            chat_menu.handle_callback(self.bot, self.callback(data))
         self.assertEqual(sources.load_config(self.path)['sources'], [])
 
     def test_selected_chat_missing_from_catalog_can_be_removed(self):
         config = {**self.config, 'sources': [{'id': 999, 'title': 'Unavailable', 'channel': False}]}
         sources.save_config(self.path, config)
-        chats.open_menu(self.bot, 'Unavailable')
+        chat_menu.open_menu(self.bot, 'Unavailable')
         self.assertIn('✅ Unavailable', str(self.api.call_args.args[2]['reply_markup']))
-        chats.handle_callback(self.bot, self.callback('chats:set:999:0:0'))
+        chat_menu.handle_callback(self.bot, self.callback('chats:set:999:0:0'))
         self.assertEqual(sources.load_config(self.path)['sources'], [])
 
     def test_refresh_requests_new_catalog_without_opening_telegram_session(self):
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         previous = sources.refresh_token(self.path)
-        chats.handle_callback(self.bot, self.callback('chats:refresh'))
+        chat_menu.handle_callback(self.bot, self.callback('chats:refresh'))
         self.assertNotEqual(sources.refresh_token(self.path), previous)
 
     def test_missing_catalog_gives_help_and_preserves_selected_chats(self):
         (self.path / 'dialogs.json').unlink()
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         self.assertIn('ещё готовит список', self.api.call_args.args[2]['text'])
 
     def test_concurrent_selection_keeps_both_changes(self):
@@ -259,7 +259,7 @@ class ChatSelectionTests(unittest.TestCase):
         self.assertEqual({item['id'] for item in sources.load_config(self.path)['sources']}, {2, 3})
 
     def test_callback_updates_are_polled_and_checkpointed(self):
-        chats.open_menu(self.bot)
+        chat_menu.open_menu(self.bot)
         update = {'update_id': 25, 'callback_query': self.callback('chats:set:2:1:0')}
         with patch.object(commands, 'bot_request', return_value=[update]) as api:
             commands.poll_once(self.bot)

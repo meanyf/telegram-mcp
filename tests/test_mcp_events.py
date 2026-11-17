@@ -247,7 +247,7 @@ class EventsTests(unittest.TestCase):
         update = self.update(text='Где можно без опыта?', reply_to_message={
             'message_id': 50, 'text': 'Нашёл три вакансии.', 'from': {'id': 123}})
         with patch.object(commands, 'bot_request') as api, \
-                patch.object(mcp_server.telegram_storage, 'get_messages') as get_messages:
+                patch.object(mcp_server.storage, 'get_messages') as get_messages:
             commands.process_update(self.config, update)
             commands.process_update(self.config, update)
             self.assertEqual(api.call_count, 1)

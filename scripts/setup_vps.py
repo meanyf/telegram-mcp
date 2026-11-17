@@ -70,7 +70,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='telegram-mcp-units-') as directory:
         for name, command in (
             ('telegram-mcp.service', 'scripts/start_mcp.py'),
-            ('telegram-collector.service', '-m telegram_mcp.telegram_collector run'),
+            ('telegram-collector.service', '-m telegram_mcp.collector run'),
         ):
             path = Path(directory) / name
             path.write_text(unit_text(command, environment_file=name == 'telegram-mcp.service'))

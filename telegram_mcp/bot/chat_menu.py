@@ -1,10 +1,10 @@
-"""Выбор источников в Telegram: /chats, поиск и кнопки с пагинацией."""
+"""Интерфейс управления источниками из sources: /chats, поиск и кнопки с пагинацией."""
 
 import hashlib
 import json
 import math
 
-from .. import telegram_sources as sources
+from .. import sources
 from ..paths import TELEGRAM_DATA
 from .delivery import bot_request
 

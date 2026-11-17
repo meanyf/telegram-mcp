@@ -37,7 +37,7 @@ python3 -m venv .venv
 описан в [документации Telegram](https://core.telegram.org/api/obtaining_api_id).
 
 ```bash
-.venv/bin/python -m telegram_mcp.telegram_collector setup
+.venv/bin/python -m telegram_mcp.collector setup
 ```
 
 Введите ключи в терминале. Для входа откройте Telegram на телефоне:
@@ -86,7 +86,7 @@ QR также доступен в `.local/telegram/login-qr.svg`: его мож�
 В первом терминале запустите сборщик:
 
 ```bash
-.venv/bin/python -m telegram_mcp.telegram_collector run
+.venv/bin/python -m telegram_mcp.collector run
 ```
 
 Во втором терминале запустите MCP с туннелем ngrok:
@@ -333,19 +333,19 @@ Telegram API, возможен повтор части.
 Один проход сбора:
 
 ```bash
-.venv/bin/python -m telegram_mcp.telegram_collector run --once
+.venv/bin/python -m telegram_mcp.collector run --once
 ```
 
 Сбор с интервалом 120 секунд:
 
 ```bash
-.venv/bin/python -m telegram_mcp.telegram_collector run --interval 120
+.venv/bin/python -m telegram_mcp.collector run --interval 120
 ```
 
 Количество сохранённых сообщений по чатам:
 
 ```bash
-.venv/bin/python -m telegram_mcp.telegram_collector status
+.venv/bin/python -m telegram_mcp.collector status
 ```
 
 MCP без туннеля:
@@ -425,14 +425,14 @@ sudo systemctl stop telegram-mcp telegram-collector
 ```text
 telegram_mcp/
   mcp_server.py       # инструменты и запуск MCP-приложения
-  telegram_collector.py # сбор сообщений Telegram
-  telegram_storage.py # чтение базы и отметки выдачи
-  telegram_sources.py # настройки источников и список диалогов
+  collector.py        # сбор сообщений Telegram
+  storage.py          # чтение базы и отметки выдачи
+  sources.py          # настройки источников и список диалогов
   paths.py            # пути к данным и промпту
   bot/
     __main__.py       # команды setup и test для бота
     commands.py       # приём /summary и обработка Telegram updates
-    chats.py          # выбор чатов кнопками, поиск и страницы
+    chat_menu.py      # выбор чатов кнопками, поиск и страницы
     inline_chats.py   # поиск чатов по мере ввода
     delivery.py       # Bot API, настройка и доставка сводок
   events/

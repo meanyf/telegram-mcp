@@ -11,7 +11,7 @@ from .paths import TELEGRAM_DATA
 def selected_sources():
     path = TELEGRAM_DATA / 'config.json'
     if not path.exists():
-        raise ValueError('Сначала настройте Telegram: .venv/bin/python -m telegram_mcp.telegram_collector setup')
+        raise ValueError('Сначала настройте Telegram: .venv/bin/python -m telegram_mcp.collector setup')
     # Конфигурация содержит ключи: наружу возвращаем только явно выбранные поля.
     config = json.loads(path.read_text())
     return {source['id']: {'chat_id': source['id'], 'title': source['title']}
@@ -21,7 +21,7 @@ def selected_sources():
 def open_messages():
     path = TELEGRAM_DATA / 'messages.sqlite3'
     if not path.exists():
-        raise ValueError('База пока не создана. Запустите .venv/bin/python -m telegram_mcp.telegram_collector run')
+        raise ValueError('База пока не создана. Запустите .venv/bin/python -m telegram_mcp.collector run')
     db = sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True)
     db.row_factory = sqlite3.Row
     return db

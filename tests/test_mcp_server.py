@@ -7,8 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from telegram_mcp import mcp_server as mcp
-from telegram_mcp import telegram_storage
-from telegram_mcp.telegram_collector import open_database
+from telegram_mcp import storage
+from telegram_mcp.collector import open_database
 
 
 class InstructionsTests(unittest.TestCase):
@@ -29,11 +29,11 @@ class TelegramMCPTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         data = Path(directory.name)
         self.now = datetime(2026, 11, 13, 12, tzinfo=timezone.utc)
-        clock = patch.object(telegram_storage, 'datetime', wraps=datetime)
+        clock = patch.object(storage, 'datetime', wraps=datetime)
         self.clock = clock.start()
         self.clock.now.return_value = self.now
         self.addCleanup(clock.stop)
-        override = patch.object(telegram_storage, 'TELEGRAM_DATA', data)
+        override = patch.object(storage, 'TELEGRAM_DATA', data)
         override.start()
         self.addCleanup(override.stop)
         (data / 'config.json').write_text(json.dumps({
@@ -55,7 +55,7 @@ class TelegramMCPTests(unittest.TestCase):
             mcp.get_telegram_messages(2)
 
     def test_first_read_returns_whole_day_then_nothing(self):
-        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+        with closing(open_database(storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
             for number in range(31, 131):
                 db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                            (1, number, 'Chat', self.now.isoformat(), None, 'New', None, 0))
@@ -66,7 +66,7 @@ class TelegramMCPTests(unittest.TestCase):
 
     def test_new_messages_returned_after_saved_cursor_without_repeating(self):
         mcp.get_telegram_messages(1)
-        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+        with closing(open_database(storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
             for number in (40, 50):
                 db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                            (1, number, 'Chat', self.now.isoformat(), None, 'New', None, 0))
@@ -75,7 +75,7 @@ class TelegramMCPTests(unittest.TestCase):
         self.assertEqual(mcp.get_telegram_messages(1)['messages'], [])
 
     def test_24_hour_boundary_uses_actual_time_with_timezone_offsets(self):
-        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+        with closing(open_database(storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
             db.execute('DELETE FROM messages')
             dates = [self.now - timedelta(hours=24, seconds=1),
                      (self.now - timedelta(hours=24)).astimezone(timezone(timedelta(hours=3))),
@@ -88,7 +88,7 @@ class TelegramMCPTests(unittest.TestCase):
 
     def test_messages_older_than_day_are_skipped_after_downtime(self):
         mcp.get_telegram_messages(1)
-        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+        with closing(open_database(storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
             for number, age in [(40, 25), (50, 1)]:
                 db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                            (1, number, 'Chat', (self.now - timedelta(hours=age)).isoformat(),
@@ -98,7 +98,7 @@ class TelegramMCPTests(unittest.TestCase):
 
     def test_window_moves_forward_on_next_request(self):
         mcp.get_telegram_messages(1)
-        with closing(open_database(telegram_storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
+        with closing(open_database(storage.TELEGRAM_DATA / 'messages.sqlite3')) as db, db:
             db.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                        (1, 40, 'Chat', (self.now + timedelta(hours=1)).isoformat(),
                         None, 'Later', None, 0))

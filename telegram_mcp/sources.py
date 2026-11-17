@@ -24,7 +24,7 @@ def write_json(path, value):
 def load_config(data):
     path = data / 'config.json'
     if not path.exists():
-        raise RuntimeError('Сначала выполните: .venv/bin/python -m telegram_mcp.telegram_collector setup')
+        raise RuntimeError('Сначала выполните: .venv/bin/python -m telegram_mcp.collector setup')
     return json.loads(path.read_text(encoding='utf-8'))
 
 

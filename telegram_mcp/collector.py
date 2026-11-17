@@ -10,7 +10,7 @@ import time
 
 
 from .paths import TELEGRAM_DATA
-from . import telegram_sources
+from . import sources
 
 DATA = TELEGRAM_DATA
 
@@ -70,11 +70,11 @@ async def collect_source(client, db, source, since):
 
 
 def load_config():
-    return telegram_sources.load_config(DATA)
+    return sources.load_config(DATA)
 
 
 def save_config(config):
-    telegram_sources.save_config(DATA, config)
+    sources.save_config(DATA, config)
 
 
 def display_login_qr(url, path):
@@ -182,10 +182,10 @@ async def run(interval, once):
         next_catalog_refresh = 0
         last_refresh_token = None
         while True:
-            token = telegram_sources.refresh_token(DATA)
+            token = sources.refresh_token(DATA)
             if time.monotonic() >= next_catalog_refresh or token != last_refresh_token:
                 try:
-                    await telegram_sources.refresh_catalog(client, DATA)
+                    await sources.refresh_catalog(client, DATA)
                     next_catalog_refresh = time.monotonic() + 300
                 except FloodWaitError as error:
                     next_catalog_refresh = time.monotonic() + error.seconds + 1

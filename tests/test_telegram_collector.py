@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
-from telegram_mcp.telegram_collector import collect_source, open_database, save_message
+from telegram_mcp.collector import collect_source, open_database, save_message
 
 
 SOURCE = {'id': -100123, 'title': 'Test', 'channel': True, 'username': None}
@@ -70,10 +70,10 @@ class QRLoginTests(unittest.IsolatedAsyncioTestCase):
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name)
-        self.data_patch = patch('telegram_mcp.telegram_collector.DATA', self.path)
+        self.data_patch = patch('telegram_mcp.collector.DATA', self.path)
         self.data_patch.start()
         self.addCleanup(self.data_patch.stop)
-        self.display_patch = patch('telegram_mcp.telegram_collector.display_login_qr',
+        self.display_patch = patch('telegram_mcp.collector.display_login_qr',
                                    side_effect=lambda url, path: path.write_text('test QR'))
         self.display = self.display_patch.start()
         self.addCleanup(self.display_patch.stop)
@@ -81,7 +81,7 @@ class QRLoginTests(unittest.IsolatedAsyncioTestCase):
                                       qr_login=AsyncMock(), sign_in=AsyncMock())
 
     async def test_expired_qr_refreshes_and_file_is_removed_after_login(self):
-        from telegram_mcp.telegram_collector import login
+        from telegram_mcp.collector import login
         expired = SimpleNamespace(url='first', wait=AsyncMock(side_effect=asyncio.TimeoutError))
         valid = SimpleNamespace(url='second', wait=AsyncMock())
         self.client.qr_login.side_effect = [expired, valid]
@@ -92,16 +92,16 @@ class QRLoginTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_two_factor_password_stays_in_local_prompt(self):
         from telethon.errors import SessionPasswordNeededError
-        from telegram_mcp.telegram_collector import login
+        from telegram_mcp.collector import login
         self.client.qr_login.return_value = SimpleNamespace(
             url='test', wait=AsyncMock(side_effect=SessionPasswordNeededError(None)))
-        with patch('telegram_mcp.telegram_collector.getpass.getpass', return_value='test-password'):
+        with patch('telegram_mcp.collector.getpass.getpass', return_value='test-password'):
             await login(self.client)
         self.client.sign_in.assert_awaited_once_with(password='test-password')
         self.assertFalse((self.path / 'login-qr.svg').exists())
 
     async def test_saved_session_skips_qr(self):
-        from telegram_mcp.telegram_collector import login
+        from telegram_mcp.collector import login
         self.client.is_user_authorized.return_value = True
         await login(self.client)
         self.client.qr_login.assert_not_called()
@@ -114,7 +114,7 @@ class SetupSourcesTests(unittest.IsolatedAsyncioTestCase):
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name)
-        override = patch('telegram_mcp.telegram_collector.DATA', self.path)
+        override = patch('telegram_mcp.collector.DATA', self.path)
         override.start()
         self.addCleanup(override.stop)
         self.config = {'api_id': 123, 'api_hash': 'test-key', 'since': '2026-11-13T00:00:00+00:00',
@@ -130,9 +130,9 @@ class SetupSourcesTests(unittest.IsolatedAsyncioTestCase):
         self.client = SimpleNamespace(connect=AsyncMock(), disconnect=AsyncMock(), iter_dialogs=dialogs)
 
     async def configure(self, answers):
-        from telegram_mcp.telegram_collector import setup
+        from telegram_mcp.collector import setup
         with patch('telethon.TelegramClient', return_value=self.client), \
-                patch('telegram_mcp.telegram_collector.login', new=AsyncMock()), \
+                patch('telegram_mcp.collector.login', new=AsyncMock()), \
                 patch('builtins.input', side_effect=answers), \
                 patch('sys.stdout', new=StringIO()):
             await setup()

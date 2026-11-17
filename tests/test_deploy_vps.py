@@ -50,7 +50,7 @@ class DeploymentTests(unittest.TestCase):
     def test_services_have_restart_policy_and_only_mcp_loads_ngrok_token(self):
         with patch('scripts.setup_vps.PROJECT_DIR', Path('/root/MCP_hh')):
             mcp = unit_text('scripts/start_mcp.py', environment_file=True)
-            collector = unit_text('-m telegram_mcp.telegram_collector run')
+            collector = unit_text('-m telegram_mcp.collector run')
         self.assertIn('WorkingDirectory=/root/MCP_hh', mcp)
         self.assertIn('ExecStart=/root/MCP_hh/.venv/bin/python scripts/start_mcp.py', mcp)
         self.assertIn('Restart=always', mcp)

@@ -1,6 +1,6 @@
 """Поиск источников по мере ввода через встроенный inline-режим Telegram."""
 
-from .. import telegram_sources as sources
+from .. import sources
 from ..paths import TELEGRAM_DATA
 from .delivery import bot_request
 
@@ -47,7 +47,7 @@ def select(config, message):
     """Обрабатывать только результат нашего бота, отправленный владельцем в ЛС."""
     if message.get('via_bot', {}).get('id') != config['bot_id']:
         return
-    from . import chats
+    from . import chat_menu
 
     try:
         parts = message['text'].split()
@@ -57,4 +57,4 @@ def select(config, message):
     except (ValueError, RuntimeError) as error:
         bot_request(config['token'], 'sendMessage', {'chat_id': config['chat_id'], 'text': str(error)})
         return
-    chats.open_menu(config)
+    chat_menu.open_menu(config)

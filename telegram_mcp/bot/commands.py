@@ -7,7 +7,7 @@ import time
 
 from ..events import EVENT_NAME, MESSAGE_EVENT_NAME, EventError, queue, storage
 from ..paths import TELEGRAM_DATA
-from . import chats, inline_chats
+from . import chat_menu, inline_chats
 from .delivery import bot_request
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ def process_update(config, update):
         inline_chats.answer(config, update['inline_query'])
         return
     if 'callback_query' in update:
-        chats.handle_callback(config, update['callback_query'])
+        chat_menu.handle_callback(config, update['callback_query'])
         return
     message = update.get('message', {})
     chat, sender = message.get('chat', {}), message.get('from', {})
@@ -37,7 +37,7 @@ def process_update(config, update):
     if command == '/chats':
         query = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ''
         try:
-            chats.open_menu(config, query)
+            chat_menu.open_menu(config, query)
         except (ValueError, RuntimeError) as error:
             bot_request(config['token'], 'sendMessage', {'chat_id': config['chat_id'], 'text': str(error)})
         return
