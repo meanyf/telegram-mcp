@@ -83,6 +83,22 @@ class TelegramBotTests(unittest.TestCase):
                     bot.setup()
                 api.assert_not_called()
 
+    def test_same_reply_text_is_sent_for_each_question_but_not_twice_for_one_request(self):
+        with patch('telegram_mcp.events.queue.request_message_id', return_value=50), \
+                patch.object(bot, 'bot_request', return_value={'message_id': 77}) as api:
+            bot.send_reply('request-1', 'Привет!')
+            self.assertTrue(bot.send_reply('request-1', 'Привет!')['already_sent'])
+            bot.send_reply('request-2', 'Привет!')
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual(api.call_args.args[2]['reply_parameters']['message_id'], 50)
+
+    def test_reply_with_unknown_request_does_not_send_anything(self):
+        with patch('telegram_mcp.events.queue.request_message_id', side_effect=ValueError('Unknown')), \
+                patch.object(bot, 'bot_request') as api:
+            with self.assertRaises(ValueError):
+                bot.send_reply('missing', 'Ответ')
+            api.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

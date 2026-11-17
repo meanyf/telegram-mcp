@@ -5,6 +5,7 @@ import hmac
 import json
 from pathlib import Path
 import socket
+import sqlite3
 from tempfile import TemporaryDirectory
 import time
 import unittest
@@ -13,7 +14,8 @@ from unittest.mock import Mock, patch
 import httpx
 
 from telegram_mcp.bot import commands
-from telegram_mcp.events import EVENT_NAME, EventError, queue, storage, subscriptions, webhooks
+from telegram_mcp.bot import delivery
+from telegram_mcp.events import EVENT_NAME, MESSAGE_EVENT_NAME, EventError, queue, storage, subscriptions, webhooks
 from telegram_mcp import mcp_server
 
 
@@ -36,14 +38,14 @@ class EventsTests(unittest.TestCase):
         challenge = json.loads(body)['challenge']
         return 200, json.dumps({'challenge': challenge}).encode()
 
-    def subscribe(self):
+    def subscribe(self, name=EVENT_NAME):
         with patch.object(webhooks, 'post_signed', side_effect=self.echo_challenge):
-            return subscriptions.handle_event_method('events/subscribe', self.params)
+            return subscriptions.handle_event_method('events/subscribe', {**self.params, 'name': name})
 
     def update(self, number=1, **message_fields):
         return {'update_id': number, 'message': {
             'chat': {'id': 456, 'type': 'private'}, 'from': {'id': 456},
-            'text': '/summary', 'date': int(time.time()), **message_fields}}
+            'text': '/summary', 'date': int(time.time()), 'message_id': 100 + number, **message_fields}}
 
     def test_subscription_verified_persistent_and_idempotent(self):
         first = self.subscribe()
@@ -90,7 +92,7 @@ class EventsTests(unittest.TestCase):
         invalid = [self.update(chat={'id': 999, 'type': 'private'}),
                    self.update(sender={'id': 999}),
                    self.update(chat={'id': 456, 'type': 'group'}),
-                   self.update(date=int(time.time()) - 600), self.update(text='hello')]
+                   self.update(date=int(time.time()) - 600), self.update(text='/unknown')]
         invalid[1]['message']['from'] = {'id': 999}
         with patch.object(commands, 'bot_request') as api:
             for update in invalid:
@@ -209,6 +211,95 @@ class EventsTests(unittest.TestCase):
         self.assertGreater(len(path), 32)
         self.assertEqual((self.path / 'events-key').stat().st_mode & 0o777, 0o600)
 
+    def test_old_summary_subscription_survives_schema_upgrade(self):
+        path = self.path / 'events.sqlite3'
+        with sqlite3.connect(path) as db:
+            db.execute('CREATE TABLE subscriptions (id TEXT PRIMARY KEY, owner TEXT NOT NULL, '
+                       'url TEXT NOT NULL, secret TEXT NOT NULL, expires REAL NOT NULL)')
+            db.execute('INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?)',
+                       ('original', '123:456', self.params['delivery']['url'],
+                        self.params['delivery']['secret'], time.time() + 3600))
+        with storage.database() as db:
+            subscription = dict(db.execute('SELECT * FROM subscriptions').fetchone())
+        self.assertEqual(subscription['name'], EVENT_NAME)
+        self.assertEqual(subscription['id'], 'original')
+        self.assertEqual(subscription['secret'], self.params['delivery']['secret'])
+        self.assertEqual(queue.enqueue_summary(1), 'queued')
+        self.assertEqual(queue.enqueue_message(2, 'Вопрос', 102), 'not_subscribed')
+
+    def test_events_route_to_their_own_subscription(self):
+        summary = self.subscribe()
+        question = self.subscribe(MESSAGE_EVENT_NAME)
+        self.assertNotEqual(summary['id'], question['id'])
+        queue.enqueue_summary(1)
+        queue.enqueue_message(2, 'Что выбрать?', 102)
+        with storage.database() as db:
+            rows = db.execute('SELECT d.subscription_id, r.body FROM deliveries d '
+                              'JOIN requests r USING(event_id)').fetchall()
+        routed = {json.loads(row['body'])['name']: row['subscription_id'] for row in rows}
+        self.assertEqual(routed, {EVENT_NAME: summary['id'], MESSAGE_EVENT_NAME: question['id']})
+        subscriptions.handle_event_method('events/unsubscribe', {**self.params, 'name': MESSAGE_EVENT_NAME})
+        self.assertEqual(queue.enqueue_message(3, 'Ещё вопрос', 103), 'not_subscribed')
+        self.assertEqual(queue.enqueue_summary(4), 'queued')
+
+    def test_question_and_bot_quote_are_saved_once_without_reading_new_messages(self):
+        self.subscribe(MESSAGE_EVENT_NAME)
+        update = self.update(text='Где можно без опыта?', reply_to_message={
+            'message_id': 50, 'text': 'Нашёл три вакансии.', 'from': {'id': 123}})
+        with patch.object(commands, 'bot_request') as api, \
+                patch.object(mcp_server.telegram_storage, 'get_messages') as get_messages:
+            commands.process_update(self.config, update)
+            commands.process_update(self.config, update)
+            self.assertEqual(api.call_count, 1)
+            get_messages.assert_not_called()
+        with storage.database() as db:
+            requests = db.execute('SELECT body FROM requests').fetchall()
+        self.assertEqual(len(requests), 1)
+        request = json.loads(requests[0]['body'])
+        self.assertEqual(request['name'], MESSAGE_EVENT_NAME)
+        self.assertEqual(request['data']['text'], 'Где можно без опыта?')
+        self.assertEqual(request['data']['reply_to'], {'message_id': 50, 'text': 'Нашёл три вакансии.'})
+        self.assertEqual(queue.request_message_id(request['eventId']), 101)
+
+    def test_foreign_users_media_and_unknown_commands_do_not_create_questions(self):
+        self.subscribe(MESSAGE_EVENT_NAME)
+        updates = [self.update(text='Вопрос', **{'from': {'id': 999}}),
+                   self.update(text='Вопрос', chat={'id': 999, 'type': 'private'}),
+                   self.update(text='Вопрос', chat={'id': 456, 'type': 'group'}),
+                   self.update(text='Вопрос', date=int(time.time()) - 600),
+                   self.update(text='', photo=[{'file_id': 'photo'}]),
+                   self.update(text='/unknown')]
+        with patch.object(commands, 'bot_request') as api:
+            for update in updates:
+                commands.process_update(self.config, update)
+            api.assert_not_called()
+        with storage.database() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM requests').fetchone()[0], 0)
+
+    def test_question_without_subscription_explains_which_event_is_missing(self):
+        self.subscribe()
+        with patch.object(commands, 'bot_request') as api:
+            commands.process_update(self.config, self.update(text='Привет'))
+        self.assertIn(MESSAGE_EVENT_NAME, api.call_args.args[2]['text'])
+        with storage.database() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM requests').fetchone()[0], 0)
+
+    def test_reply_only_accepts_question_of_current_owner(self):
+        self.subscribe()
+        self.subscribe(MESSAGE_EVENT_NAME)
+        queue.enqueue_summary(1)
+        queue.enqueue_message(2, 'Вопрос', 102)
+        with storage.database() as db:
+            rows = db.execute('SELECT event_id, body FROM requests').fetchall()
+        ids = {json.loads(row['body'])['name']: row['event_id'] for row in rows}
+        self.assertEqual(queue.request_message_id(ids[MESSAGE_EVENT_NAME]), 102)
+        for request_id in ('missing', ids[EVENT_NAME]):
+            with self.assertRaises(ValueError):
+                queue.request_message_id(request_id)
+        (self.path / 'bot.json').write_text(json.dumps({**self.config, 'chat_id': 999}))
+        with self.assertRaises(ValueError):
+            queue.request_message_id(ids[MESSAGE_EVENT_NAME])
+
     def test_asgi_initialize_events_and_regular_tool_calls(self):
         async def direct(function, *args, **kwargs):
             return function(*args)
@@ -249,6 +340,22 @@ class EventsTests(unittest.TestCase):
                         cancelled = await rpc('events/unsubscribe', self.params)
                         self.assertEqual(cancelled.json()['result'], {})
                         self.assertEqual(queue.enqueue_summary(101), 'not_subscribed')
+                        with patch.object(webhooks, 'post_signed', side_effect=self.echo_challenge):
+                            question_sub = await rpc('events/subscribe', {**self.params, 'name': MESSAGE_EVENT_NAME})
+                        self.assertIn('id', question_sub.json()['result'])
+                        with patch.object(commands, 'bot_request'):
+                            commands.process_update(self.config, self.update(102, text='Объясни выжимку'))
+                        with patch.object(webhooks, 'post_signed', return_value=(200, b'')) as sent:
+                            queue.deliver_pending()
+                        request = json.loads(sent.call_args.args[-1])
+                        self.assertEqual(request['data']['text'], 'Объясни выжимку')
+                        with patch.object(delivery, 'TELEGRAM_DATA', self.path), \
+                                patch.object(delivery, 'bot_request', return_value={'message_id': 999}) as telegram:
+                            reply = await rpc('tools/call', {'name': 'send_telegram_reply', 'arguments': {
+                                'request_id': request['eventId'], 'text': 'Вот пояснение.'}})
+                        self.assertFalse(reply.json()['result'].get('isError', False))
+                        self.assertEqual(telegram.call_args.args[2]['chat_id'], 456)
+                        self.assertEqual(telegram.call_args.args[2]['reply_parameters']['message_id'], 202)
                         tools = await rpc('tools/list')
                         names = [tool['name'] for tool in tools.json()['result']['tools']]
                         self.assertIn('get_analysis_instructions', names)

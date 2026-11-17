@@ -9,7 +9,7 @@ import threading
 from mcp.server.fastmcp import FastMCP
 
 from . import telegram_storage
-from .bot.delivery import send_summary
+from .bot.delivery import send_reply, send_summary
 from .paths import INSTRUCTIONS_PATH
 
 server = FastMCP(
@@ -67,6 +67,17 @@ def send_telegram_summary(text: str) -> dict:
     пропускает части, отправка которых уже была подтверждена Telegram.
     """
     return send_summary(text)
+
+
+@server.tool(annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True})
+def send_telegram_reply(request_id: str, text: str) -> dict:
+    """Ответить владельцу бота на вопрос из события telegram.message_received.
+
+    Передай request_id события и готовый ответ. Получатель фиксирован локально,
+    ответ привязывается к исходному вопросу в Telegram. Используй историю этого
+    разговора и reply_to события; для уточнения не запрашивай новую выжимку.
+    """
+    return send_reply(request_id, text)
 
 
 def create_app():

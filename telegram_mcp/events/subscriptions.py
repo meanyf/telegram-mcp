@@ -7,7 +7,7 @@ import json
 import secrets
 import time
 
-from . import EVENT_NAME, EventError, webhooks
+from . import EVENT_NAME, MESSAGE_EVENT_NAME, EventError, webhooks
 from .storage import database, owner_id
 
 def event_catalog():
@@ -20,6 +20,24 @@ def event_catalog():
             'type': 'object', 'properties': {'request_id': {'type': 'string'}},
             'required': ['request_id'], 'additionalProperties': False,
         },
+    }, {
+        'name': MESSAGE_EVENT_NAME,
+        'description': 'Владелец Telegram-бота написал вопрос или уточнение к выжимке.',
+        'delivery': ['webhook'],
+        'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False},
+        'payloadSchema': {
+            'type': 'object',
+            'properties': {
+                'request_id': {'type': 'string'}, 'text': {'type': 'string'},
+                'message_id': {'type': 'integer'},
+                'reply_to': {
+                    'type': 'object', 'properties': {
+                        'message_id': {'type': 'integer'}, 'text': {'type': 'string'},
+                    }, 'required': ['message_id', 'text'], 'additionalProperties': False,
+                },
+            },
+            'required': ['request_id', 'text', 'message_id'], 'additionalProperties': False,
+        },
     }]}
 
 def handle_event_method(method, params):
@@ -30,12 +48,13 @@ def handle_event_method(method, params):
     if not isinstance(params, dict):
         raise EventError('Некорректные параметры события.')
     delivery = params.get('delivery', {})
-    if (params.get('name') != EVENT_NAME or params.get('arguments', {}) != {}
+    name = params.get('name')
+    if (name not in (EVENT_NAME, MESSAGE_EVENT_NAME) or params.get('arguments', {}) != {}
             or not isinstance(delivery, dict) or not isinstance(delivery.get('url'), str)):
         raise EventError('Неизвестное событие или фильтры.')
     owner = owner_id()
     url = delivery['url']
-    identity = hashlib.sha256(json.dumps([owner, url, EVENT_NAME, {}]).encode()).hexdigest()
+    identity = hashlib.sha256(json.dumps([owner, url, name, {}]).encode()).hexdigest()
     if method == 'events/unsubscribe':
         with database() as db:
             db.execute('DELETE FROM subscriptions WHERE id = ? AND owner = ?', (identity, owner))
@@ -51,9 +70,9 @@ def handle_event_method(method, params):
         raise EventError('ttlMs должен быть положительным числом или null.')
     expires = time.time() + min((ttl or 86400000) / 1000, 86400)
     with database() as db:
-        # One active ChatGPT task prevents concurrent analysis consuming the same cursors.
-        other = db.execute('SELECT id FROM subscriptions WHERE owner = ? AND expires > ? AND id != ?',
-                           (owner, time.time(), identity)).fetchone()
+        # Each event has one recipient task, while summaries and questions can coexist.
+        other = db.execute('SELECT id FROM subscriptions WHERE owner = ? AND name = ? AND expires > ? AND id != ?',
+                           (owner, name, time.time(), identity)).fetchone()
         if other:
             raise EventError('Уже есть подписка. Отключите прежнее задание в ChatGPT перед созданием нового.')
     challenge = secrets.token_urlsafe(24)
@@ -68,11 +87,11 @@ def handle_event_method(method, params):
     with database() as db:
         db.execute('BEGIN IMMEDIATE')
         # Recheck after verification: concurrent registration must not create two tasks.
-        if db.execute('SELECT id FROM subscriptions WHERE owner = ? AND expires > ? AND id != ?',
-                      (owner, time.time(), identity)).fetchone():
+        if db.execute('SELECT id FROM subscriptions WHERE owner = ? AND name = ? AND expires > ? AND id != ?',
+                      (owner, name, time.time(), identity)).fetchone():
             raise EventError('Подписка уже создана другим запросом.')
-        db.execute('INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?) '
+        db.execute('INSERT INTO subscriptions(id, owner, url, secret, expires, name) VALUES (?, ?, ?, ?, ?, ?) '
                    'ON CONFLICT(id) DO UPDATE SET secret=excluded.secret, expires=excluded.expires',
-                   (identity, owner, url, secret, expires))
+                   (identity, owner, url, secret, expires, name))
     return {'id': identity, 'refreshBefore': datetime.fromtimestamp(expires, timezone.utc).isoformat(),
             'cursor': None, 'truncated': False}

@@ -6,30 +6,54 @@ import logging
 import secrets
 import time
 
-from . import EVENT_NAME, EventError, webhooks
+from . import EVENT_NAME, MESSAGE_EVENT_NAME, EventError, webhooks
 from .storage import database, owner_id
 
 MAX_ATTEMPTS = 5
 
 def enqueue_summary(update_id):
+    return enqueue_request(update_id, EVENT_NAME, {})
+
+
+def enqueue_message(update_id, text, message_id, reply_to=None):
+    data = {'text': text, 'message_id': message_id}
+    if reply_to:
+        data['reply_to'] = reply_to
+    return enqueue_request(update_id, MESSAGE_EVENT_NAME, data)
+
+
+def enqueue_request(update_id, name, data):
     owner = owner_id()
     with database() as db:
         db.execute('BEGIN IMMEDIATE')
         if db.execute('SELECT 1 FROM requests WHERE owner = ? AND update_id = ?', (owner, update_id)).fetchone():
             return 'duplicate'
-        subscribers = db.execute('SELECT id FROM subscriptions WHERE owner = ? AND expires > ?',
-                                 (owner, time.time())).fetchall()
+        subscribers = db.execute('SELECT id FROM subscriptions WHERE owner = ? AND name = ? AND expires > ?',
+                                 (owner, name, time.time())).fetchall()
         if not subscribers:
             return 'not_subscribed'
-        event_id = 'summary_' + secrets.token_hex(16)
-        body = json.dumps({'eventId': event_id, 'name': EVENT_NAME,
+        prefix = 'summary_' if name == EVENT_NAME else 'message_'
+        event_id = prefix + secrets.token_hex(16)
+        body = json.dumps({'eventId': event_id, 'name': name,
                            'timestamp': datetime.now(timezone.utc).isoformat(),
-                           'data': {'request_id': event_id}, 'cursor': None})
+                           'data': {**data, 'request_id': event_id}, 'cursor': None})
         db.execute('INSERT INTO requests VALUES (?, ?, ?, ?)', (event_id, owner, update_id, body))
         for subscription in subscribers:
             db.execute('INSERT INTO deliveries(event_id, subscription_id) VALUES (?, ?)',
                        (event_id, subscription['id']))
     return 'queued'
+
+
+def request_message_id(request_id):
+    """Проверить, что ответ относится к вопросу текущего владельца бота."""
+    with database() as db:
+        row = db.execute('SELECT body FROM requests WHERE event_id = ? AND owner = ?',
+                         (request_id, owner_id())).fetchone()
+    if row:
+        request = json.loads(row['body'])
+        if request['name'] == MESSAGE_EVENT_NAME:
+            return request['data']['message_id']
+    raise ValueError('Запрос вопроса не найден для настроенного получателя.')
 
 def deliver_pending():
     owner = owner_id()

@@ -105,14 +105,28 @@ def split_text(text):
 
 
 def send_summary(text):
+    return _send_text(text)
+
+
+def send_reply(request_id, text):
+    from ..events.queue import request_message_id
+
+    message_id = request_message_id(request_id)
+    return _send_text(text, request_id=request_id, reply_to_message_id=message_id)
+
+
+def _send_text(text, *, request_id=None, reply_to_message_id=None):
     if not text.strip():
-        raise ValueError('Сводка пустая.')
+        raise ValueError('Текст сообщения пустой.')
     path = TELEGRAM_DATA / 'bot.json'
     if not path.exists():
         raise ValueError('Сначала выполните: .venv/bin/python -m telegram_mcp.telegram_bot setup')
     config = json.loads(path.read_text(encoding='utf-8'))
     parts = split_text(text)
-    key = hashlib.sha256(f'{config["bot_id"]}:{config["chat_id"]}:{text}'.encode()).hexdigest()
+    identity = f'{config["bot_id"]}:{config["chat_id"]}:{text}'
+    if request_id is not None:
+        identity += f':request:{request_id}'
+    key = hashlib.sha256(identity.encode()).hexdigest()
     # Сериализуем отправки, чтобы повторный вызов не дублировал уже доставленные части.
     with (TELEGRAM_DATA / 'bot-send.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -133,10 +147,15 @@ def send_summary(text):
                 if sent_now:
                     time.sleep(1.1)
                 try:
-                    message = bot_request(config['token'], 'sendMessage', {
+                    parameters = {
                         'chat_id': config['chat_id'], 'text': part,
                         'link_preview_options': {'is_disabled': True},
-                    })
+                    }
+                    if reply_to_message_id is not None:
+                        parameters['reply_parameters'] = {
+                            'message_id': reply_to_message_id, 'allow_sending_without_reply': True,
+                        }
+                    message = bot_request(config['token'], 'sendMessage', parameters)
                 except RuntimeError as error:
                     raise RuntimeError(f'Отправка остановлена; подтверждено частей: {len(message_ids)}. {error}') from None
                 with db:

@@ -53,7 +53,8 @@ def database():
         db.executescript('''
             CREATE TABLE IF NOT EXISTS subscriptions (
                 id TEXT PRIMARY KEY, owner TEXT NOT NULL, url TEXT NOT NULL,
-                secret TEXT NOT NULL, expires REAL NOT NULL);
+                secret TEXT NOT NULL, expires REAL NOT NULL,
+                name TEXT NOT NULL DEFAULT 'summary.requested');
             CREATE TABLE IF NOT EXISTS requests (
                 event_id TEXT PRIMARY KEY, owner TEXT NOT NULL, update_id INTEGER NOT NULL,
                 body TEXT NOT NULL, UNIQUE(owner, update_id));
@@ -64,6 +65,12 @@ def database():
                 PRIMARY KEY(event_id, subscription_id));
             CREATE TABLE IF NOT EXISTS offsets (bot_id INTEGER PRIMARY KEY, value INTEGER NOT NULL);
         ''')
+        # Existing summary subscriptions keep their IDs, callbacks and signing keys.
+        if 'name' not in {row['name'] for row in db.execute('PRAGMA table_info(subscriptions)')}:
+            db.execute('BEGIN IMMEDIATE')
+            if 'name' not in {row['name'] for row in db.execute('PRAGMA table_info(subscriptions)')}:
+                db.execute("ALTER TABLE subscriptions ADD COLUMN name TEXT NOT NULL DEFAULT 'summary.requested'")
+            db.commit()
         with db:
             yield db
     finally:

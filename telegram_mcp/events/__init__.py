@@ -1,6 +1,7 @@
 """События MCP: подписки, очередь и доставка уведомлений."""
 
 EVENT_NAME = 'summary.requested'
+MESSAGE_EVENT_NAME = 'telegram.message_received'
 
 
 class EventError(Exception):
