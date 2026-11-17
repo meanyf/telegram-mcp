@@ -12,6 +12,27 @@ from telegram_mcp.collector import open_database
 
 
 class InstructionsTests(unittest.TestCase):
+    def test_timing_records_tool_duration_and_count_without_message_text(self):
+        with patch.object(storage, 'get_messages', return_value={'messages': [{'text': 'private message'}]}), \
+                self.assertLogs(mcp.logger, level='INFO') as logs:
+            mcp.get_telegram_messages(123)
+        text = '\n'.join(logs.output)
+        self.assertIn('tool=get_telegram_messages stage=started', text)
+        self.assertIn('stage=finished', text)
+        self.assertIn('duration_seconds=', text)
+        self.assertIn('messages=1', text)
+        self.assertNotIn('private message', text)
+
+    def test_timing_preserves_failure_without_logging_error_content(self):
+        with patch.object(mcp, 'send_summary', side_effect=RuntimeError('private failure details')), \
+                self.assertLogs(mcp.logger, level='INFO') as logs:
+            with self.assertRaisesRegex(RuntimeError, 'private failure details'):
+                mcp.send_telegram_summary('private summary')
+        text = '\n'.join(logs.output)
+        self.assertIn('stage=failed', text)
+        self.assertNotIn('private failure details', text)
+        self.assertNotIn('private summary', text)
+
     def test_returns_full_instructions_and_reads_changes_on_each_call(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'instructions.md'

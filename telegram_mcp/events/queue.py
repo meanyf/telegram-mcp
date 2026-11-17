@@ -10,6 +10,7 @@ from . import EVENT_NAME, MESSAGE_EVENT_NAME, EventError, webhooks
 from .storage import database, owner_id
 
 MAX_ATTEMPTS = 5
+logger = logging.getLogger(__name__)
 
 def enqueue_summary(update_id):
     return enqueue_request(update_id, EVENT_NAME, {})
@@ -41,6 +42,7 @@ def enqueue_request(update_id, name, data):
         for subscription in subscribers:
             db.execute('INSERT INTO deliveries(event_id, subscription_id) VALUES (?, ?)',
                        (event_id, subscription['id']))
+    logger.info('TIMING event=%s stage=queued name=%s', event_id, name)
     return 'queued'
 
 
@@ -65,6 +67,10 @@ def deliver_pending():
             WHERE d.state = 'pending' AND d.next_try <= ? AND s.owner = ? LIMIT 10''',
                           (time.time(), owner)).fetchall()
     for row in rows:
+        started = time.monotonic()
+        queued_at = datetime.fromisoformat(json.loads(row['body'])['timestamp']).timestamp()
+        logger.info('TIMING event=%s stage=delivery_started attempt=%s age_seconds=%.3f',
+                    row['event_id'], row['attempts'] + 1, time.time() - queued_at)
         state, status = 'pending', None
         if row['expires'] <= time.time():
             state = 'expired'
@@ -88,6 +94,10 @@ def deliver_pending():
                         row['event_id'], row['subscription_id']))
             if status == 410:
                 db.execute('DELETE FROM subscriptions WHERE id = ?', (row['subscription_id'],))
+        logger.info('TIMING event=%s stage=delivery_finished state=%s status=%s '
+                    'attempt=%s duration_seconds=%.3f age_seconds=%.3f',
+                    row['event_id'], state, status, attempts, time.monotonic() - started,
+                    time.time() - queued_at)
         if state in ('failed', 'expired'):
             failures.append(row['event_id'])
             # No callback URL, signing secret or Telegram message text in logs.

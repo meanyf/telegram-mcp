@@ -42,6 +42,20 @@ class EventsTests(unittest.TestCase):
         with patch.object(webhooks, 'post_signed', side_effect=self.echo_challenge):
             return subscriptions.handle_event_method('events/subscribe', {**self.params, 'name': name})
 
+    def test_timing_records_queue_and_delivery_attempts_without_payload_or_secrets(self):
+        self.subscribe(MESSAGE_EVENT_NAME)
+        with self.assertLogs(queue.logger, level='INFO') as logs:
+            queue.enqueue_message(700, 'private question', 800)
+            with patch.object(webhooks, 'post_signed', return_value=(200, b'')):
+                queue.deliver_pending()
+        text = '\n'.join(logs.output)
+        self.assertIn('stage=queued', text)
+        self.assertIn('stage=delivery_started attempt=1', text)
+        self.assertIn('stage=delivery_finished state=delivered status=200', text)
+        self.assertIn('age_seconds=', text)
+        for value in ('private question', self.params['delivery']['url'], self.params['delivery']['secret']):
+            self.assertNotIn(value, text)
+
     def update(self, number=1, **message_fields):
         return {'update_id': number, 'message': {
             'chat': {'id': 456, 'type': 'private'}, 'from': {'id': 456},
