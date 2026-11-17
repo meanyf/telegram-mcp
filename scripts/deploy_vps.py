@@ -1,10 +1,12 @@
 """Первый перенос через scp и обновление через rsync."""
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 from pathlib import Path
 import re
 import shutil
+import shlex
 import subprocess
 import tempfile
 
@@ -17,9 +19,9 @@ DATA_FILES = ('config.json', 'account.session', 'messages.sqlite3',
 REMOTE_DIR = 'MCP_hh'
 
 
-def rsync_command(target, port):
+def rsync_command(target, port, ssh_options=()):
     command = ['rsync', '-az', '--delete', '--itemize-changes',
-               '-e', f'ssh -p {port}', '--exclude=__pycache__/', '--exclude=*.pyc']
+               '-e', shlex.join(['ssh', '-p', str(port), *ssh_options]), '--exclude=__pycache__/', '--exclude=*.pyc']
     for name in CODE_PATHS:
         pattern = f'/{name}/***' if (PROJECT_DIR / name).is_dir() else f'/{name}'
         command.append(f'--include={pattern}')
@@ -30,6 +32,24 @@ def rsync_command(target, port):
 
 def run(command, **kwargs):
     subprocess.run(command, check=True, **kwargs)
+
+
+@contextmanager
+def ssh_connection(target, port):
+    """Одна авторизация на весь перенос, включая scp и rsync."""
+    with tempfile.TemporaryDirectory(prefix='mcp-ssh-') as directory:
+        control = ['-o', f'ControlPath={directory}/socket']
+        run(['ssh', '-M', '-N', '-f', '-o', 'ControlMaster=yes',
+             '-o', 'ControlPersist=no', *control, '-p', str(port), target])
+        options = [*control, '-o', 'ControlMaster=no', '-o', 'BatchMode=yes']
+        try:
+            yield options
+        finally:
+            try:
+                subprocess.run(['ssh', *options, '-p', str(port), '-O', 'exit', target],
+                               check=False, capture_output=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
 
 
 def main():
@@ -45,7 +65,12 @@ def main():
     for tool in ('ssh', 'scp' if args.command == 'init' else 'rsync'):
         if not shutil.which(tool):
             parser.error(f'Установите {tool}.')
-    ssh = ['ssh', '-p', str(args.port), args.target]
+    with ssh_connection(args.target, args.port) as ssh_options:
+        deploy(args, ssh_options)
+
+
+def deploy(args, ssh_options):
+    ssh = ['ssh', *ssh_options, '-p', str(args.port), args.target]
 
     if args.command == 'init':
         # Refuse to overwrite a previous installation or its Telegram state.
@@ -84,19 +109,19 @@ def main():
                         shutil.copy2(source, destination)
                     destination.chmod(0o600)
                 run([*ssh, f'mkdir -m 700 {REMOTE_DIR}'])
-                run(['scp', '-P', str(args.port), '-r',
+                run(['scp', *ssh_options, '-P', str(args.port), '-r',
                      *[str(staging / name) for name in CODE_PATHS],
                      str(staging / '.local'), f'{args.target}:{REMOTE_DIR}/'])
-        run(['ssh', '-t', '-p', str(args.port), args.target,
+        run(['ssh', *ssh_options, '-t', '-p', str(args.port), args.target,
              f'cd {REMOTE_DIR} && python3 scripts/setup_vps.py install'])
     else:
         run([*ssh, f'test -x {REMOTE_DIR}/.venv/bin/python && command -v rsync >/dev/null'])
         # Stop before replacing code, so a running process cannot import half an update.
-        run(['ssh', '-t', '-p', str(args.port), args.target,
+        run(['ssh', *ssh_options, '-t', '-p', str(args.port), args.target,
              f'cd {REMOTE_DIR} && python3 scripts/setup_vps.py stop'])
         try:
-            run(rsync_command(args.target, args.port))
-            run(['ssh', '-t', '-p', str(args.port), args.target,
+            run(rsync_command(args.target, args.port, ssh_options))
+            run(['ssh', *ssh_options, '-t', '-p', str(args.port), args.target,
                  f'cd {REMOTE_DIR} && python3 scripts/setup_vps.py update'])
         except (Exception, KeyboardInterrupt):
             print('Обновление прервано. Сервисы могут быть остановлены. Исправьте ошибку и повторите update.')

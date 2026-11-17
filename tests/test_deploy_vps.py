@@ -1,6 +1,7 @@
 """Проверить защиту данных VPS при реальной локальной синхронизации rsync."""
 
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
@@ -12,6 +13,40 @@ from scripts.setup_vps import unit_text
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_update_reuses_one_authenticated_connection_and_closes_it(self):
+        with patch.object(deploy_vps.subprocess, 'run') as process, \
+                patch.object(deploy_vps.shutil, 'which', return_value='/usr/bin/tool'), \
+                patch('sys.argv', ['deploy_vps.py', 'update', 'root@vps', '--port', '2222']):
+            deploy_vps.main()
+        commands = [call.args[0] for call in process.call_args_list]
+        self.assertEqual(sum('-M' in command for command in commands), 1)
+        master = commands[0]
+        self.assertIn('ControlMaster=yes', master)
+        self.assertNotIn('BatchMode=yes', master)
+        socket = next(value for value in master if value.startswith('ControlPath='))
+        for command in commands[1:]:
+            transport = shlex.split(command[command.index('-e') + 1]) if command[0] == 'rsync' else command
+            self.assertIn(socket, transport)
+            self.assertIn('BatchMode=yes', transport)
+            self.assertEqual(transport[transport.index('-p') + 1], '2222')
+        self.assertIn('-O', commands[-1])
+        self.assertEqual(commands[-1][-2:], ['exit', 'root@vps'])
+        self.assertFalse(Path(socket.split('=', 1)[1]).parent.exists())
+
+    def test_failed_transfer_closes_connection_and_preserves_original_error(self):
+        with patch.object(deploy_vps.subprocess, 'run') as process:
+            with self.assertRaisesRegex(RuntimeError, 'transfer failed'):
+                with deploy_vps.ssh_connection('root@vps', 22):
+                    process.side_effect = OSError('cleanup failed')
+                    raise RuntimeError('transfer failed')
+        self.assertIn('-O', process.call_args.args[0])
+
+    def test_rsync_quotes_control_socket_path(self):
+        socket = 'ControlPath=/tmp/directory with spaces/socket'
+        command = deploy_vps.rsync_command('root@vps', 22, ['-o', socket])
+        transport = shlex.split(command[command.index('-e') + 1])
+        self.assertIn(socket, transport)
+
     def test_update_targets_existing_project_in_ssh_users_home(self):
         command = deploy_vps.rsync_command('root@vps', 22)
         self.assertEqual(command[-1], 'root@vps:MCP_hh/')
