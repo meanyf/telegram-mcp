@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.error import HTTPError
 
 from telegram_mcp import collector, sources
@@ -61,6 +61,34 @@ class ChatSelectionTests(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertTrue(all(row[0]['text'].startswith('✅') for row in rows))
         self.assertTrue(all(len(button.get('callback_data', '').encode()) <= 64 for row in keyboard for button in row))
+
+    def test_worker_registers_owner_command_menu_once_without_blocking_polling(self):
+        stop = Mock()
+        stop.is_set.side_effect = [False, False, True]
+        with patch.object(commands.storage, 'bot_config', return_value=self.bot), \
+                patch.object(commands.queue, 'deliver_pending', return_value=[]), \
+                patch.object(commands, 'poll_once') as poll, \
+                patch.object(commands, 'bot_request') as api:
+            commands.run(stop)
+        self.assertEqual(poll.call_count, 2)
+        self.assertEqual([call.args[1] for call in api.call_args_list], ['setMyCommands', 'setChatMenuButton'])
+        menu = api.call_args_list[0].args[2]
+        self.assertEqual(menu['scope'], {'type': 'chat', 'chat_id': 456})
+        self.assertEqual([item['command'] for item in menu['commands']], ['summary', 'chats', 'help'])
+        self.assertEqual(api.call_args.args[2], {'chat_id': 456, 'menu_button': {'type': 'commands'}})
+
+    def test_menu_registration_failure_does_not_stop_bot_and_is_retried(self):
+        stop = Mock()
+        stop.is_set.side_effect = [False, False, True]
+        with patch.object(commands.storage, 'bot_config', return_value=self.bot), \
+                patch.object(commands.queue, 'deliver_pending', return_value=[]), \
+                patch.object(commands, 'poll_once') as poll, \
+                patch.object(commands, 'bot_request', side_effect=[RuntimeError('offline'), True, True]) as api, \
+                self.assertLogs(commands.logger, level='WARNING'):
+            commands.run(stop)
+        self.assertEqual(poll.call_count, 2)
+        self.assertEqual([call.args[1] for call in api.call_args_list],
+                         ['setMyCommands', 'setMyCommands', 'setChatMenuButton'])
 
     def test_all_chats_are_separate_and_paginated(self):
         chat_menu.open_menu(self.bot)

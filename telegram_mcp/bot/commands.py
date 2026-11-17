@@ -13,6 +13,21 @@ from .delivery import bot_request
 logger = logging.getLogger(__name__)
 
 
+def register_menu(config):
+    """Зарегистрировать подсказки команд и кнопку меню в личном чате владельца."""
+    bot_request(config['token'], 'setMyCommands', {
+        'scope': {'type': 'chat', 'chat_id': config['chat_id']},
+        'commands': [
+            {'command': 'summary', 'description': 'Получить новую выжимку'},
+            {'command': 'chats', 'description': 'Выбрать чаты для сбора'},
+            {'command': 'help', 'description': 'Показать справку'},
+        ],
+    })
+    bot_request(config['token'], 'setChatMenuButton', {
+        'chat_id': config['chat_id'], 'menu_button': {'type': 'commands'},
+    })
+
+
 def process_update(config, update):
     if 'inline_query' in update:
         inline_chats.answer(config, update['inline_query'])
@@ -93,9 +108,18 @@ def run(stop):
             logger.warning('Команды Telegram уже принимает другой процесс на этом компьютере.')
             return
         logger.info('Приём Telegram включён: /summary и текстовые вопросы.')
+        menu_owner = None
         while not stop.is_set():
             try:
                 config = storage.bot_config()
+                owner = (config['bot_id'], config['chat_id'])
+                if menu_owner != owner:
+                    try:
+                        register_menu(config)
+                    except RuntimeError as error:
+                        logger.warning('Не удалось обновить меню Telegram: %s', error)
+                    else:
+                        menu_owner = owner
                 failed = queue.deliver_pending()
                 if failed:
                     bot_request(config['token'], 'sendMessage', {
