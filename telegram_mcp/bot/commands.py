@@ -6,12 +6,20 @@ import sqlite3
 import time
 
 from ..events import EVENT_NAME, MESSAGE_EVENT_NAME, EventError, queue, storage
+from ..paths import TELEGRAM_DATA
+from . import chats, inline_chats
 from .delivery import bot_request
 
 logger = logging.getLogger(__name__)
 
 
 def process_update(config, update):
+    if 'inline_query' in update:
+        inline_chats.answer(config, update['inline_query'])
+        return
+    if 'callback_query' in update:
+        chats.handle_callback(config, update['callback_query'])
+        return
     message = update.get('message', {})
     chat, sender = message.get('chat', {}), message.get('from', {})
     if (chat.get('type') != 'private' or chat.get('id') != config['chat_id']
@@ -19,12 +27,23 @@ def process_update(config, update):
         return
     text = message.get('text', '').strip()
     command = text.split(maxsplit=1)[0].split('@', 1)[0] if text else ''
-    if not text or (command.startswith('/') and command not in ('/summary', '/help', '/start')):
+    if not text or (command.startswith('/') and command not in ('/summary', '/help', '/start', '/chats', inline_chats.ADD_COMMAND)):
         return
     if time.time() - message.get('date', 0) > 300:
         return
+    if command == inline_chats.ADD_COMMAND:
+        inline_chats.select(config, message)
+        return
+    if command == '/chats':
+        query = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ''
+        try:
+            chats.open_menu(config, query)
+        except (ValueError, RuntimeError) as error:
+            bot_request(config['token'], 'sendMessage', {'chat_id': config['chat_id'], 'text': str(error)})
+        return
     if command in ('/start', '/help'):
-        reply = ('/summary — новая выжимка. Обычный текст — вопрос к ИИ. '
+        reply = ('/summary — новая выжимка. /chats — выбор чатов для сбора. '
+                 'Обычный текст — вопрос к ИИ. '
                  'Можно ответить на сообщение бота, чтобы уточнить его. '
                  'Ответы выполняет подключённое задание ChatGPT.')
     else:
@@ -55,7 +74,7 @@ def poll_once(config):
         row = db.execute('SELECT value FROM offsets WHERE bot_id = ?', (config['bot_id'],)).fetchone()
     updates = bot_request(config['token'], 'getUpdates', {
         'offset': row['value'] if row else 0, 'limit': 100, 'timeout': 10,
-        'allowed_updates': ['message'],
+        'allowed_updates': ['message', 'callback_query', 'inline_query'],
     })
     for update in updates:
         process_update(config, update)
@@ -66,8 +85,8 @@ def poll_once(config):
 
 
 def run(stop):
-    storage.TELEGRAM_DATA.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (storage.TELEGRAM_DATA / 'bot-poll.lock').open('a') as lock:
+    TELEGRAM_DATA.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (TELEGRAM_DATA / 'bot-poll.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

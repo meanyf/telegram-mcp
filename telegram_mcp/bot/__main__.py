@@ -1,6 +1,6 @@
 """Команды настройки и проверки Telegram-бота."""
 
-from .bot.delivery import main
+from .delivery import main
 
 
 if __name__ == '__main__':

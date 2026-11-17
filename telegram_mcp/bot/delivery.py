@@ -27,6 +27,16 @@ def bot_request(token, method, parameters=None):
         with urlopen(request, timeout=20) as response:
             result = json.load(response)
     except HTTPError as error:
+        if method in ('editMessageText', 'answerCallbackQuery', 'answerInlineQuery') and error.code == 400:
+            try:
+                with error:
+                    description = json.load(error).get('description', '')
+            except (ValueError, AttributeError):
+                description = ''
+            if method == 'editMessageText' and description.startswith('Bad Request: message is not modified'):
+                return {'message_id': parameters['message_id']}
+            if method in ('answerCallbackQuery', 'answerInlineQuery') and description.startswith('Bad Request: query is too old'):
+                return False
         # В URL есть токен: не выводим исходное исключение или тело ответа.
         raise RuntimeError(f'Telegram Bot API: HTTP {error.code}. Проверьте токен и доступ бота к чату.') from None
     except (URLError, TimeoutError, OSError):
@@ -120,7 +130,7 @@ def _send_text(text, *, request_id=None, reply_to_message_id=None):
         raise ValueError('Текст сообщения пустой.')
     path = TELEGRAM_DATA / 'bot.json'
     if not path.exists():
-        raise ValueError('Сначала выполните: .venv/bin/python -m telegram_mcp.telegram_bot setup')
+        raise ValueError('Сначала выполните: .venv/bin/python -m telegram_mcp.bot setup')
     config = json.loads(path.read_text(encoding='utf-8'))
     parts = split_text(text)
     identity = f'{config["bot_id"]}:{config["chat_id"]}:{text}'

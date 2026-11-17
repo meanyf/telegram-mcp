@@ -4,12 +4,13 @@ import argparse
 import asyncio
 from datetime import datetime, timedelta, timezone
 import getpass
-import json
 import os
 import sqlite3
+import time
 
 
 from .paths import TELEGRAM_DATA
+from . import telegram_sources
 
 DATA = TELEGRAM_DATA
 
@@ -69,18 +70,11 @@ async def collect_source(client, db, source, since):
 
 
 def load_config():
-    path = DATA / 'config.json'
-    if not path.exists():
-        raise RuntimeError('Сначала выполните: .venv/bin/python -m telegram_mcp.telegram_collector setup')
-    return json.loads(path.read_text())
+    return telegram_sources.load_config(DATA)
 
 
 def save_config(config):
-    path = DATA / 'config.json'
-    temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(config, ensure_ascii=False, indent=2))
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    telegram_sources.save_config(DATA, config)
 
 
 def display_login_qr(url, path):
@@ -177,8 +171,6 @@ async def run(interval, once):
     from telethon.errors import FloodWaitError
 
     config = load_config()
-    if not config.get('sources'):
-        raise RuntimeError('Не выбраны чаты. Выполните setup.')
     client = TelegramClient(str(DATA / 'account'), config['api_id'], config['api_hash'],
                             receive_updates=False)
     await client.connect()
@@ -187,10 +179,30 @@ async def run(interval, once):
         if not await client.is_user_authorized():
             raise RuntimeError('Сессия недействительна. Выполните setup в терминале.')
         db = open_database(DATA / 'messages.sqlite3')
-        since = datetime.fromisoformat(config['since'])
+        next_catalog_refresh = 0
+        last_refresh_token = None
         while True:
+            token = telegram_sources.refresh_token(DATA)
+            if time.monotonic() >= next_catalog_refresh or token != last_refresh_token:
+                try:
+                    await telegram_sources.refresh_catalog(client, DATA)
+                    next_catalog_refresh = time.monotonic() + 300
+                except FloodWaitError as error:
+                    next_catalog_refresh = time.monotonic() + error.seconds + 1
+                    print(f'Обновление списка чатов: пауза Telegram {error.seconds} с.', flush=True)
+                    if not once:
+                        await asyncio.sleep(error.seconds + 1)
+                except Exception as error:
+                    next_catalog_refresh = time.monotonic() + 60
+                    print(f'Не удалось обновить список чатов: {type(error).__name__}.', flush=True)
+                last_refresh_token = token
+            config = load_config()
+            since = datetime.fromisoformat(config.get('since') or
+                                           (datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
             failures = 0
-            for source in config['sources']:
+            for source in config.get('sources', []):
+                if source['id'] not in {item['id'] for item in load_config().get('sources', [])}:
+                    continue
                 try:
                     count = await collect_source(client, db, source, since)
                     print(f'{source["title"]}: сохранено {count}', flush=True)
