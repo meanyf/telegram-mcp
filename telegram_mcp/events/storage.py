@@ -64,6 +64,9 @@ def database():
                 state TEXT NOT NULL DEFAULT 'pending',
                 PRIMARY KEY(event_id, subscription_id));
             CREATE TABLE IF NOT EXISTS offsets (bot_id INTEGER PRIMARY KEY, value INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS command_confirmations (
+                bot_id INTEGER NOT NULL, update_id INTEGER NOT NULL,
+                PRIMARY KEY(bot_id, update_id));
         ''')
         # Existing summary subscriptions keep their IDs, callbacks and signing keys.
         if 'name' not in {row['name'] for row in db.execute('PRAGMA table_info(subscriptions)')}:

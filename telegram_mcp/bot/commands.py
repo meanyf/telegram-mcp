@@ -13,6 +13,21 @@ from .delivery import bot_request
 logger = logging.getLogger(__name__)
 
 
+def confirm_request(config, update_id, text, *, retry=False):
+    """Повторить неподтверждённую отправку, не создавая новое событие."""
+    with storage.database() as db:
+        sent = db.execute('SELECT 1 FROM command_confirmations WHERE bot_id = ? AND update_id = ?',
+                          (config['bot_id'], update_id)).fetchone()
+    if sent:
+        return
+    if retry:
+        logger.info('TIMING update=%s stage=confirmation_retry', update_id)
+    bot_request(config['token'], 'sendMessage', {'chat_id': config['chat_id'], 'text': text})
+    with storage.database() as db:
+        db.execute('INSERT OR IGNORE INTO command_confirmations VALUES (?, ?)', (config['bot_id'], update_id))
+    logger.info('TIMING update=%s stage=confirmation_sent', update_id)
+
+
 def register_menu(config):
     """Зарегистрировать подсказки команд и кнопку меню в личном чате владельца."""
     bot_request(config['token'], 'setMyCommands', {
@@ -50,7 +65,17 @@ def process_update(config, update):
     if not text:
         return
     if time.time() - message.get('date', 0) > 300:
-        return
+        queued = False
+        if command == '/summary':
+            # Retry an acknowledgment even after a long outage if the request was already saved.
+            with storage.database() as db:
+                queued = db.execute('SELECT 1 FROM requests WHERE owner = ? AND update_id = ?',
+                                    (f'{config["bot_id"]}:{config["chat_id"]}', update['update_id'])).fetchone()
+            if not queued:
+                logger.warning('TIMING update=%s stage=summary_ignored reason=older_than_300_seconds',
+                               update['update_id'])
+        if not queued:
+            return
     if command == '/cancel':
         prompt_menu.cancel(config)
         return
@@ -91,10 +116,10 @@ def process_update(config, update):
             result = queue.enqueue_message(update['update_id'], text, message['message_id'], quote)
             event_name = MESSAGE_EVENT_NAME
             confirmation = 'Вопрос сохранён. Передаю в ChatGPT; ответ придёт сюда.'
-        if result == 'duplicate':
+        if result in ('queued', 'duplicate'):
+            confirm_request(config, update['update_id'], confirmation, retry=result == 'duplicate')
             return
-        reply = (confirmation if result == 'queued' else
-                 f'Нет активной подписки ChatGPT на {event_name}. '
+        reply = (f'Нет активной подписки ChatGPT на {event_name}. '
                  'В том же чате ChatGPT, где делается выжимка, подключите MCP '
                  'и попросите подписаться на это событие и отвечать вам в Telegram.')
     bot_request(config['token'], 'sendMessage', {'chat_id': config['chat_id'], 'text': reply})
@@ -108,6 +133,14 @@ def poll_once(config):
         'allowed_updates': ['message', 'callback_query', 'inline_query'],
     })
     for update in updates:
+        message = update.get('message', {})
+        if (message.get('chat', {}).get('id') == config['chat_id']
+                and message.get('from', {}).get('id') == config['chat_id']):
+            text = message.get('text', '').strip()
+            command = text.split(maxsplit=1)[0].split('@', 1)[0] if text else ''
+            if command == '/summary':
+                logger.info('TIMING update=%s stage=summary_received age_seconds=%.3f',
+                            update['update_id'], time.time() - message.get('date', 0))
         process_update(config, update)
         with storage.database() as db:
             db.execute('INSERT INTO offsets VALUES (?, ?) ON CONFLICT(bot_id) '

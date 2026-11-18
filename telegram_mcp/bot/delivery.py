@@ -5,6 +5,7 @@ from contextlib import closing
 import fcntl
 import getpass
 import hashlib
+from http.client import HTTPException
 import json
 import os
 import re
@@ -17,6 +18,12 @@ from ..paths import TELEGRAM_DATA
 
 
 def bot_request(token, method, parameters=None):
+    started = time.monotonic()
+
+    def failure(detail):
+        return RuntimeError(f'Telegram Bot API method={method} '
+                            f'duration_seconds={time.monotonic() - started:.3f}: {detail}')
+
     request = Request(
         f'https://api.telegram.org/bot{token}/{method}',
         data=json.dumps(parameters or {}).encode('utf-8'),
@@ -38,13 +45,24 @@ def bot_request(token, method, parameters=None):
             if method in ('answerCallbackQuery', 'answerInlineQuery') and description.startswith('Bad Request: query is too old'):
                 return False
         # В URL есть токен: не выводим исходное исключение или тело ответа.
-        raise RuntimeError(f'Telegram Bot API: HTTP {error.code}. Проверьте токен и доступ бота к чату.') from None
-    except (URLError, TimeoutError, OSError):
-        raise RuntimeError('Не удалось получить ответ Telegram Bot API. Проверьте интернет.') from None
+        error.close()
+        raise failure(f'HTTP {error.code}. Проверьте токен и доступ бота к чату.') from None
+    except (URLError, TimeoutError, OSError, HTTPException) as error:
+        reason = error.reason if isinstance(error, URLError) else error
+        # Only the exception class and numeric errno: raw messages may contain the token URL.
+        error_type = type(reason).__name__
+        errno = reason.errno if isinstance(reason, OSError) and isinstance(reason.errno, int) else None
+        raise failure(f'Ошибка соединения type={error_type} errno={errno}. Проверьте интернет.') from None
     except ValueError:
-        raise RuntimeError('Telegram Bot API вернул некорректный ответ.') from None
+        raise failure('Некорректный JSON в ответе.') from None
+    if not isinstance(result, dict):
+        raise failure('Некорректный формат ответа.')
     if not result.get('ok'):
-        raise RuntimeError('Telegram Bot API отклонил запрос.')
+        code = result.get('error_code')
+        code = code if isinstance(code, int) else None
+        raise failure(f'Запрос отклонён code={code}.')
+    if 'result' not in result:
+        raise failure('В ответе отсутствует result.')
     return result['result']
 
 

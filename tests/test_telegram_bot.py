@@ -1,11 +1,12 @@
-from io import StringIO
+from io import BytesIO, StringIO
+from http.client import IncompleteRead
 import fcntl
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from telegram_mcp.bot import delivery as bot
 
@@ -56,6 +57,43 @@ class TelegramBotTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as error:
                 bot.bot_request('123:secret', 'getMe')
         self.assertNotIn('secret', str(error.exception))
+
+    def test_timeout_records_method_type_and_duration_without_raw_error(self):
+        with patch.object(bot, 'urlopen', side_effect=URLError(TimeoutError('123:secret'))), \
+                patch.object(bot.time, 'monotonic', side_effect=[10.0, 30.0]):
+            with self.assertRaises(RuntimeError) as error:
+                bot.bot_request('123:secret', 'getUpdates')
+        text = str(error.exception)
+        self.assertIn('method=getUpdates', text)
+        self.assertIn('type=TimeoutError', text)
+        self.assertIn('duration_seconds=20.000', text)
+        self.assertNotIn('secret', text)
+
+    def test_http_failure_records_method_and_status_without_response_body(self):
+        error = HTTPError('https://api.telegram.org/bot123:secret', 429, 'private response', {},
+                          BytesIO(b'{"description":"123:secret private message"}'))
+        with patch.object(bot, 'urlopen', side_effect=error):
+            with self.assertRaises(RuntimeError) as result:
+                bot.bot_request('123:secret', 'sendMessage', {'text': 'private message'})
+        self.assertIn('method=sendMessage', str(result.exception))
+        self.assertIn('HTTP 429', str(result.exception))
+        self.assertNotIn('private', str(result.exception))
+        self.assertNotIn('secret', str(result.exception))
+
+    def test_truncated_response_is_recoverable_and_does_not_expose_partial_content(self):
+        with patch.object(bot, 'urlopen', side_effect=IncompleteRead(b'123:secret', 100)):
+            with self.assertRaisesRegex(RuntimeError, 'type=IncompleteRead') as result:
+                bot.bot_request('123:secret', 'getUpdates')
+        self.assertNotIn('secret', str(result.exception))
+
+    def test_malformed_response_structure_does_not_crash_polling_with_key_error(self):
+        for response in ([], {'ok': True}, {'ok': False, 'description': '123:secret'}):
+            with self.subTest(response=response), \
+                    patch.object(bot, 'urlopen', return_value=BytesIO(json.dumps(response).encode())):
+                with self.assertRaises(RuntimeError) as result:
+                    bot.bot_request('123:secret', 'getUpdates')
+                self.assertIn('method=getUpdates', str(result.exception))
+                self.assertNotIn('secret', str(result.exception))
 
     def test_setup_selects_private_chat_and_does_not_send_anything(self):
         updates = [

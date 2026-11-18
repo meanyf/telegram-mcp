@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from telegram_mcp import instructions, mcp_server
 from telegram_mcp.bot import commands, prompt_menu
+from telegram_mcp.events import storage
 
 
 class PromptTests(unittest.TestCase):
@@ -26,7 +27,8 @@ class PromptTests(unittest.TestCase):
                 (mcp_server, 'INSTRUCTIONS_PATH', self.base),
                 (instructions, 'DEFAULT_PREFERENCES_PATH', self.defaults),
                 (instructions, 'PREFERENCES_PATH', self.preferences),
-                (prompt_menu, 'TELEGRAM_DATA', self.preferences.parent)):
+                (prompt_menu, 'TELEGRAM_DATA', self.preferences.parent),
+                (storage, 'TELEGRAM_DATA', self.preferences.parent)):
             override = patch.object(module, name, value)
             override.start()
             self.addCleanup(override.stop)

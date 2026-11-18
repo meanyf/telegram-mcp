@@ -195,6 +195,38 @@ class EventsTests(unittest.TestCase):
             commands.poll_once(self.config)
         self.assertEqual(api.call_args.args[2]['offset'], 43)
 
+    def test_failed_confirmation_is_retried_without_duplicating_event_or_advancing_offset(self):
+        self.subscribe()
+        update = self.update(52)
+        responses = [[update], RuntimeError('Telegram Bot API method=sendMessage: timeout'),
+                     [update], {'message_id': 1}, []]
+        with patch.object(commands, 'bot_request', side_effect=responses) as api:
+            with self.assertRaisesRegex(RuntimeError, 'sendMessage'):
+                commands.poll_once(self.config)
+            with storage.database() as db:
+                self.assertIsNone(db.execute('SELECT value FROM offsets WHERE bot_id = 123').fetchone())
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM requests').fetchone()[0], 1)
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM command_confirmations').fetchone()[0], 0)
+            update['message']['date'] -= 600
+            with self.assertLogs(commands.logger, level='INFO') as logs:
+                commands.poll_once(self.config)
+            self.assertIn('stage=confirmation_retry', '\n'.join(logs.output))
+            commands.poll_once(self.config)
+        sends = [call for call in api.call_args_list if call.args[1] == 'sendMessage']
+        self.assertEqual(len(sends), 2)
+        self.assertEqual(sends[0].args[2], sends[1].args[2])
+        self.assertEqual(api.call_args.args[2]['offset'], 53)
+        with storage.database() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM requests').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM command_confirmations').fetchone()[0], 1)
+
+    def test_failed_get_updates_logs_method_and_preserves_offset(self):
+        with patch.object(commands, 'bot_request', side_effect=RuntimeError('method=getUpdates type=TimeoutError')):
+            with self.assertRaisesRegex(RuntimeError, 'getUpdates'):
+                commands.poll_once(self.config)
+        with storage.database() as db:
+            self.assertIsNone(db.execute('SELECT value FROM offsets WHERE bot_id = 123').fetchone())
+
     def test_callback_rejects_private_mixed_and_multicast_addresses(self):
         for url in ('http://example.com', 'https://user:pass@example.com', 'https://example.com:8443'):
             with self.assertRaises(EventError):
