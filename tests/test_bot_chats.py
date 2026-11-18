@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from urllib.error import HTTPError
 
 from telegram_mcp import collector, sources
-from telegram_mcp.bot import chat_menu, commands, delivery, inline_chats
+from telegram_mcp.bot import chat_menu, commands, delivery, inline_chats, prompt_menu
 from telegram_mcp.events import storage
 
 
@@ -20,7 +20,7 @@ class ChatSelectionTests(unittest.TestCase):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.path = Path(directory.name)
-        for module in (storage, chat_menu, inline_chats, commands):
+        for module in (storage, chat_menu, inline_chats, commands, prompt_menu):
             override = patch.object(module, 'TELEGRAM_DATA', self.path)
             override.start()
             self.addCleanup(override.stop)
@@ -74,7 +74,7 @@ class ChatSelectionTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in api.call_args_list], ['setMyCommands', 'setChatMenuButton'])
         menu = api.call_args_list[0].args[2]
         self.assertEqual(menu['scope'], {'type': 'chat', 'chat_id': 456})
-        self.assertEqual([item['command'] for item in menu['commands']], ['summary', 'chats', 'help'])
+        self.assertEqual([item['command'] for item in menu['commands']], ['summary', 'chats', 'prompt', 'help'])
         self.assertEqual(api.call_args.args[2], {'chat_id': 456, 'menu_button': {'type': 'commands'}})
 
     def test_menu_registration_failure_does_not_stop_bot_and_is_retried(self):

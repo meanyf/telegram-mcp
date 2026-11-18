@@ -38,10 +38,11 @@ class InstructionsTests(unittest.TestCase):
             path = Path(directory) / 'instructions.md'
             text = 'Правила анализа\n' * 100 + 'Конец полного промпта'
             path.write_text(text, encoding='utf-8')
-            with patch.object(mcp, 'INSTRUCTIONS_PATH', path):
-                self.assertEqual(mcp.get_analysis_instructions(), text)
+            with patch.object(mcp, 'INSTRUCTIONS_PATH', path), \
+                    patch.object(mcp.instructions, 'PREFERENCES_PATH', Path(directory) / 'preferences.md'):
+                self.assertTrue(mcp.get_analysis_instructions().startswith(text))
                 path.write_text('Обновлённые правила', encoding='utf-8')
-                self.assertEqual(mcp.get_analysis_instructions(), 'Обновлённые правила')
+                self.assertTrue(mcp.get_analysis_instructions().startswith('Обновлённые правила\n'))
 
 
 class TelegramMCPTests(unittest.TestCase):

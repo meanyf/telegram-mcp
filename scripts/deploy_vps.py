@@ -15,7 +15,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 CODE_PATHS = ('README.md', 'requirements.txt', 'telegram_mcp', 'scripts', 'prompts', 'tests')
 DATA_FILES = ('config.json', 'account.session', 'messages.sqlite3',
               'delivery.sqlite3', 'bot.json', 'bot-outbox.sqlite3',
-              'events-key', 'events.sqlite3')
+              'events-key', 'events.sqlite3', 'preferences.md')
 REMOTE_DIR = 'MCP_hh'
 
 

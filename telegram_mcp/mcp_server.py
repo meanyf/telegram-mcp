@@ -11,7 +11,7 @@ import time
 
 from mcp.server.fastmcp import FastMCP
 
-from . import storage
+from . import instructions, storage
 from .bot.delivery import send_reply, send_summary
 from .paths import INSTRUCTIONS_PATH
 
@@ -55,7 +55,7 @@ server = FastMCP(
 @timed_tool
 def get_analysis_instructions() -> str:
     """Получить полные актуальные инструкции перед анализом Telegram и отправкой сводки."""
-    return INSTRUCTIONS_PATH.read_text(encoding="utf-8")
+    return instructions.read(INSTRUCTIONS_PATH)
 
 
 @server.tool(annotations={"readOnlyHint": True})
